@@ -22,7 +22,8 @@ RbdReadExact(_In_ INT Fd,
 {
     WNBD_LOG_LOUD(": Enter");
 
-    if(!Data) {
+    if(!Data || Fd == -1) {
+        // TODO: return proper status for missing fd.
         *error = STATUS_INSUFFICIENT_RESOURCES;
         return -1;
     }
@@ -54,6 +55,13 @@ RbdWriteExact(_In_ INT Fd,
     WNBD_LOG_LOUD(": Enter");
     INT Result = 0;
     PUCHAR Temp = Data;
+
+    if(Fd == -1) {
+        // TODO: return proper status for missing fd.
+        *error = STATUS_INSUFFICIENT_RESOURCES;
+        return -1;
+    }
+
     while (Length > 0) {
         WNBD_LOG_INFO("Size to send = %lu", Length);
         Result = Send(Fd, Temp, Length, 0, error);

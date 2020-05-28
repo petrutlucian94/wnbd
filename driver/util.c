@@ -235,6 +235,11 @@ VOID CloseConnection(_In_ PSCSI_DEVICE_INFORMATION DeviceInformation) {
         Close(DeviceInformation->Socket);
         DeviceInformation->Socket = -1;
         DeviceInformation->Device->Missing = TRUE;
+        // TODO: why do we have two flags that are handled in the same way?
+        DeviceInformation->SoftTerminateDevice = TRUE;
+        DeviceInformation->HardTerminateDevice = TRUE;
+        KeSetEvent(&DeviceInformation->DeviceEvent, (KPRIORITY)0, FALSE);
+
     }
     ExReleaseResourceLite(&DeviceInformation->GlobalInformation->ConnectionMutex);
     KeLeaveCriticalRegion();

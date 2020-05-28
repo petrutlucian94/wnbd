@@ -684,6 +684,14 @@ KsSendRecv(
   // Wrap the buffer into the "WSK buffer".
   //
 
+  KSOCKET_ASYNC_CONTEXT AsyncContext;
+  Status = KspAsyncContextAllocate(&AsyncContext);
+
+  if (!NT_SUCCESS(Status))
+  {
+    return Status;
+  }
+
   WSK_BUF WskBuffer;
   WskBuffer.Offset  = 0;
   WskBuffer.Length  = *Length;
@@ -708,7 +716,7 @@ KsSendRecv(
   // Reset the async context.
   //
 
-  KspAsyncContextReset(&Socket->AsyncContext);
+  // KspAsyncContextReset(&AsyncContext);
 
   //
   // Send / receive the data.
@@ -720,7 +728,7 @@ KsSendRecv(
       Socket->WskSocket,        // Socket
       &WskBuffer,               // Buffer
       Flags,                    // Flags
-      Socket->AsyncContext.Irp  // Irp
+      AsyncContext.Irp  // Irp
       );
   }
   else
@@ -729,11 +737,12 @@ KsSendRecv(
       Socket->WskSocket,        // Socket
       &WskBuffer,               // Buffer
       Flags,                    // Flags
-      Socket->AsyncContext.Irp  // Irp
+      AsyncContext.Irp  // Irp
       );
   }
 
-  KspAsyncContextWaitForCompletion(&Socket->AsyncContext, &Status);
+  KspAsyncContextWaitForCompletion(&AsyncContext, &Status);
+  KspAsyncContextFree(&AsyncContext);
 
   //
   // Set the number of bytes sent / received.
