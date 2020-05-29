@@ -16,6 +16,8 @@
 
 VOID DrainDeviceQueue(PWNBD_SCSI_DEVICE Device, PLIST_ENTRY ListHead, PKSPIN_LOCK ListLock)
 {
+    WNBD_LOG_LOUD(": Enter");
+
     PLIST_ENTRY Request;
     PSRB_QUEUE_ELEMENT Element;
 
@@ -26,8 +28,8 @@ VOID DrainDeviceQueue(PWNBD_SCSI_DEVICE Device, PLIST_ENTRY ListHead, PKSPIN_LOC
         Element->Srb->SrbStatus = SRB_STATUS_ABORTED;
 
         InterlockedDecrement(&Device->OutstandingIoCount);
-        WNBD_LOG_INFO("Notifying StorPort of completion of %p status: 0x%x(%s)",
-            Element->Srb, Element->Srb->SrbStatus,
+        WNBD_LOG_INFO("Notifying StorPort of completion of %p 0x%llx status: 0x%x(%s)",
+            Element->Srb, Element->Tag, Element->Srb->SrbStatus,
             WnbdToStringSrbStatus(Element->Srb->SrbStatus));
         StorPortNotification(RequestComplete, Element->DeviceExtension,
                              Element->Srb);
@@ -88,7 +90,10 @@ UCHAR DrainDeviceQueues(PVOID DeviceExtension,
     PSCSI_DEVICE_INFORMATION Info = (PSCSI_DEVICE_INFORMATION)Device->ScsiDeviceExtension;
 
     DrainDeviceQueue(Device, &Info->RequestListHead, &Info->RequestListLock);
-    DrainDeviceQueue(Device, &Info->ReplyListHead, &Info->ReplyListLock);
+    // Should we set those in-flight requests to SRB_STATUS_ABORT_FAILED?
+    // We can't set them to SRB_STATUS_ABORTED because those requests have been
+    // submitted and will most probably complete.
+    // DrainDeviceQueue(Device, &Info->ReplyListHead, &Info->ReplyListLock);
 
     SrbStatus = SRB_STATUS_SUCCESS;
 

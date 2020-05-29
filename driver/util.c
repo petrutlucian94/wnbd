@@ -48,6 +48,7 @@ WnbdDeleteScsiInformation(_In_ PVOID ScsiInformation)
         ScsiInfo->UserEntry = NULL;
     }
 
+
     if (-1 != ScsiInfo->Socket) {
         WNBD_LOG_INFO("Closing socket FD: %d", ScsiInfo->Socket);
         Close(ScsiInfo->Socket);
@@ -73,7 +74,6 @@ WnbdDeleteDevices(_In_ PWNBD_EXTENSION Ext,
     PLIST_ENTRY Link, Next;
     KeEnterCriticalRegion();
     ExAcquireResourceSharedLite(&Ext->DeviceResourceLock, TRUE);
-    KeEnterCriticalRegion();
     ExAcquireResourceExclusiveLite(&((PGLOBAL_INFORMATION)Ext->GlobalInformation)->ConnectionMutex, TRUE);
     LIST_FORALL_SAFE(&Ext->DeviceList, Link, Next) {
         Device = (PWNBD_SCSI_DEVICE)CONTAINING_RECORD(Link, WNBD_SCSI_DEVICE, ListEntry);
@@ -95,7 +95,6 @@ WnbdDeleteDevices(_In_ PWNBD_EXTENSION Ext,
     ExReleaseResourceLite(&((PGLOBAL_INFORMATION)Ext->GlobalInformation)->ConnectionMutex);
     KeLeaveCriticalRegion();
     ExReleaseResourceLite(&Ext->DeviceResourceLock);
-    KeLeaveCriticalRegion();
 
     WNBD_LOG_INFO("Request to exit DeleteDevicesThreadStart");
 
@@ -296,6 +295,8 @@ WnbdProcessDeviceThreadRequests(_In_ PSCSI_DEVICE_INFORMATION DeviceInformation)
             ExInterlockedInsertTailList(
                 &DeviceInformation->ReplyListHead,
                 &Element->Link, &DeviceInformation->ReplyListLock);
+            WNBD_LOG_LOUD("Pending request. Address: %p Tag: 0x%llx",
+                          Element->Srb, Element->Tag);
             KeSetEvent(&DeviceInformation->DeviceEventReply, (KPRIORITY)0, FALSE);
         } else {
             Element->Srb->DataTransferLength = 0;
@@ -435,11 +436,12 @@ WnbdProcessDeviceThreadReplies(_In_ PSCSI_DEVICE_INFORMATION DeviceInformation)
     }
     KeReleaseSpinLock(&DeviceInformation->ReplyListLock, Irql);
     if(!Element) {
-        WNBD_LOG_ERROR("Received reply with no matching request tag: 0x%x",
+        WNBD_LOG_ERROR("Received reply with no matching request tag: 0x%llx",
             Reply.Handle);
         CloseConnection(DeviceInformation);
         goto Exit;
     }
+    WNBD_LOG_LOUD("Received reply header for %p 0x%llx.", Element->Srb, Element->Tag);
 
     // TODO: can we use this buffer directly?
     // No, because of STOR_MAP_NON_READ_WRITE_BUFFERS
@@ -459,7 +461,8 @@ WnbdProcessDeviceThreadReplies(_In_ PSCSI_DEVICE_INFORMATION DeviceInformation)
         }
 
         if (-1 == RbdReadExact(DeviceInformation->Socket, TempBuff, Element->ReadLength, &error)) {
-            WNBD_LOG_ERROR("Failed receiving reply. Error: %d", error);
+            WNBD_LOG_ERROR("Failed receiving reply %p 0x%llx. Error: %d",
+                           Element->Srb, Element->Tag, error);
             Element->Srb->DataTransferLength = 0;
             Element->Srb->SrbStatus = SRB_STATUS_INTERNAL_ERROR;
             CloseConnection(DeviceInformation);
@@ -471,6 +474,8 @@ WnbdProcessDeviceThreadReplies(_In_ PSCSI_DEVICE_INFORMATION DeviceInformation)
     // TODO: rename ReadLength to DataLength
     Element->Srb->DataTransferLength = Element->ReadLength;
     Element->Srb->SrbStatus = SRB_STATUS_SUCCESS;
+    WNBD_LOG_LOUD("Successfully completed request %p 0x%llx.",
+                  Element->Srb, Element->Tag);
 
 Exit:
     if(TempBuff) {
