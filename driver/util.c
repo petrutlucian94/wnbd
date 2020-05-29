@@ -260,6 +260,8 @@ WnbdProcessDeviceThreadRequests(_In_ PSCSI_DEVICE_INFORMATION DeviceInformation)
         Element->Tag = RequestTag;
         Element->Srb->DataTransferLength = 0;
         PCDB Cdb = (PCDB)&Element->Srb->Cdb;
+        WNBD_LOG_INFO("Processing request. Address: %p Tag: 0x%llx",
+                      Status, Element->Srb, Element->Tag);
         switch (Cdb->AsByte[0]) {
         case SCSIOP_READ6:
         case SCSIOP_READ:
@@ -301,7 +303,8 @@ WnbdProcessDeviceThreadRequests(_In_ PSCSI_DEVICE_INFORMATION DeviceInformation)
         } else {
             Element->Srb->DataTransferLength = 0;
             Element->Srb->SrbStatus = SRB_STATUS_TIMEOUT;
-            WNBD_LOG_INFO("FD failed with: %x", Status);
+            WNBD_LOG_INFO("FD failed with: %x. Address: %p Tag: 0x%llx",
+                          Status, Element->Srb, Element->Tag);
             if (STATUS_CONNECTION_RESET == Status ||
                 STATUS_CONNECTION_DISCONNECTED == Status ||
                 STATUS_CONNECTION_ABORTED == Status) {
@@ -448,6 +451,8 @@ WnbdProcessDeviceThreadReplies(_In_ PSCSI_DEVICE_INFORMATION DeviceInformation)
     ULONG StorResult;
     StorResult = StorPortGetSystemAddress(Element->DeviceExtension, Element->Srb, &SrbBuff);
     if (STOR_STATUS_SUCCESS != StorResult) {
+        WNBD_LOG_ERROR("Could not get SRB %p 0x%llx data buffer. Error: %d.",
+                       Element->Srb, Element->Tag, error);
         Element->Srb->SrbStatus = SRB_STATUS_INTERNAL_ERROR;
         goto Exit;
     }

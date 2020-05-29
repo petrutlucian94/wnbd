@@ -37,6 +37,31 @@ VOID DrainDeviceQueue(PWNBD_SCSI_DEVICE Device, PLIST_ENTRY ListHead, PKSPIN_LOC
     }
 }
 
+
+VOID SendAbortFailedForQueue(PLIST_ENTRY ListHead, PKSPIN_LOCK ListLock)
+{
+    WNBD_LOG_LOUD(": Enter");
+
+    PSRB_QUEUE_ELEMENT Element;
+    PLIST_ENTRY ItemLink, ItemNext;
+    KIRQL Irql = { 0 };
+
+    KeAcquireSpinLock(ListLock, &Irql);
+    LIST_FORALL_SAFE(ListHead, ItemLink, ItemNext) {
+        Element = CONTAINING_RECORD(ItemLink, SRB_QUEUE_ELEMENT, Link);
+
+        Element->Srb->DataTransferLength = 0;
+        Element->Srb->SrbStatus = SRB_STATUS_ABORT_FAILED;
+
+        WNBD_LOG_INFO("Notifying StorPort of completion of %p 0x%llx status: 0x%x(%s)",
+            Element->Srb, Element->Tag, Element->Srb->SrbStatus,
+            WnbdToStringSrbStatus(Element->Srb->SrbStatus));
+        StorPortNotification(RequestComplete, Element->DeviceExtension,
+                             Element->Srb);
+    }
+    KeReleaseSpinLock(ListLock, Irql);
+}
+
 UCHAR DrainDeviceQueues(PVOID DeviceExtension,
                         PSCSI_REQUEST_BLOCK Srb)
 
@@ -94,6 +119,7 @@ UCHAR DrainDeviceQueues(PVOID DeviceExtension,
     // We can't set them to SRB_STATUS_ABORTED because those requests have been
     // submitted and will most probably complete.
     // DrainDeviceQueue(Device, &Info->ReplyListHead, &Info->ReplyListLock);
+    SendAbortFailedForQueue(&Info->ReplyListHead, &Info->ReplyListLock);
 
     SrbStatus = SRB_STATUS_SUCCESS;
 
