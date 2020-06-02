@@ -350,6 +350,7 @@ WnbdPendElement(_In_ PVOID DeviceExtension,
     Element->Srb = Srb;
     Element->StartingLbn = StartingLbn;
     Element->ReadLength = (ULONG)DataLength;
+    Element->Aborted = 0;
     ExInterlockedInsertTailList(&ScsiInfo->RequestListHead, &Element->Link, &ScsiInfo->RequestListLock);
 
     KeSetEvent(&ScsiInfo->DeviceEvent, (KPRIORITY)0, FALSE);

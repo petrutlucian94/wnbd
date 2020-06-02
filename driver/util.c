@@ -479,8 +479,14 @@ WnbdProcessDeviceThreadReplies(_In_ PSCSI_DEVICE_INFORMATION DeviceInformation)
     // TODO: rename ReadLength to DataLength
     Element->Srb->DataTransferLength = Element->ReadLength;
     Element->Srb->SrbStatus = SRB_STATUS_SUCCESS;
-    WNBD_LOG_LOUD("Successfully completed request %p 0x%llx.",
-                  Element->Srb, Element->Tag);
+    if(Element->Aborted) {
+        WNBD_LOG_WARN("Got reply for aborted request: %p 0x%llx.",
+                      Element->Srb, Element->Tag);
+    }
+    else {
+        WNBD_LOG_LOUD("Successfully completed request %p 0x%llx.",
+                      Element->Srb, Element->Tag);
+    }
 
 Exit:
     if(TempBuff) {
@@ -488,10 +494,13 @@ Exit:
     }
     InterlockedDecrement(&DeviceInformation->Device->OutstandingIoCount);
     if (Element) {
-        WNBD_LOG_INFO("Notifying StorPort of completion of %p status: 0x%x(%s)",
-            Element->Srb, Element->Srb->SrbStatus,
-            WnbdToStringSrbStatus(Element->Srb->SrbStatus));
-        StorPortNotification(RequestComplete, Element->DeviceExtension, Element->Srb);
+        if(!Element->Aborted) {
+            WNBD_LOG_INFO("Notifying StorPort of completion of %p status: 0x%x(%s)",
+                Element->Srb, Element->Srb->SrbStatus,
+                WnbdToStringSrbStatus(Element->Srb->SrbStatus));
+            StorPortNotification(RequestComplete, Element->DeviceExtension,
+                                 Element->Srb);
+        }
         ExFreePool(Element);
     }
 }

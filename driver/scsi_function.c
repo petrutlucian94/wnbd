@@ -26,6 +26,7 @@ VOID DrainDeviceQueue(PWNBD_SCSI_DEVICE Device, PLIST_ENTRY ListHead, PKSPIN_LOC
 
         Element->Srb->DataTransferLength = 0;
         Element->Srb->SrbStatus = SRB_STATUS_ABORTED;
+        Element->Aborted = 1;
 
         InterlockedDecrement(&Device->OutstandingIoCount);
         WNBD_LOG_INFO("Notifying StorPort of completion of %p 0x%llx status: 0x%x(%s)",
@@ -51,7 +52,8 @@ VOID SendAbortFailedForQueue(PLIST_ENTRY ListHead, PKSPIN_LOCK ListLock)
         Element = CONTAINING_RECORD(ItemLink, SRB_QUEUE_ELEMENT, Link);
 
         Element->Srb->DataTransferLength = 0;
-        Element->Srb->SrbStatus = SRB_STATUS_ABORT_FAILED;
+        Element->Srb->SrbStatus = SRB_STATUS_ABORTED;
+        Element->Aborted = 1;
 
         WNBD_LOG_INFO("Notifying StorPort of completion of %p 0x%llx status: 0x%x(%s)",
             Element->Srb, Element->Tag, Element->Srb->SrbStatus,

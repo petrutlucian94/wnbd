@@ -34,6 +34,7 @@ typedef struct _SRB_QUEUE_ELEMENT {
     ULONG ReadLength;
     PVOID DeviceExtension;
     UINT64 Tag;
+    BOOLEAN Aborted;
 } SRB_QUEUE_ELEMENT, * PSRB_QUEUE_ELEMENT;
 
 VOID
