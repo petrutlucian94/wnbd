@@ -41,6 +41,8 @@ VOID DrainDeviceQueue(PWNBD_SCSI_DEVICE Device, PLIST_ENTRY ListHead,
         KeAcquireSpinLock(&DeviceInformation->StatsLock, &Irql);
         DeviceInformation->Stats.AbortedUnsubmittedIORequests += 1;
         KeReleaseSpinLock(&DeviceInformation->StatsLock, Irql);
+
+        KeReleaseSemaphore(&DeviceInformation->RequestSemaphore, 0, 1, FALSE);
     }
 }
 
@@ -69,9 +71,13 @@ VOID SendAbortFailedForQueue(PLIST_ENTRY ListHead, PKSPIN_LOCK ListLock,
                              Element->Srb);
 
         KIRQL Irql2 = { 0 };
+        // TODO: consider using InterlockedIncrement.
         KeAcquireSpinLock(&DeviceInformation->StatsLock, &Irql2);
         DeviceInformation->Stats.AbortedSubmittedIORequests += 1;
         KeReleaseSpinLock(&DeviceInformation->StatsLock, Irql2);
+
+        // TODO: should we release the semaphore for aborted but still pending requests?
+        KeReleaseSemaphore(&DeviceInformation->RequestSemaphore, 0, 1, FALSE);
     }
     KeReleaseSpinLock(ListLock, Irql);
 }

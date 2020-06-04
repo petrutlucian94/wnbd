@@ -12,6 +12,9 @@
 #include "scsi_driver_extensions.h"
 #include "userspace_shared.h"
 
+// TODO: make this configurable.
+#define MAX_IN_FLIGHT_REQUESTS 255
+
 typedef struct _USER_ENTRY {
     LIST_ENTRY                         ListEntry;
     struct _SCSI_DEVICE_INFORMATION*   ScsiInformation;
@@ -44,6 +47,8 @@ typedef struct _SCSI_DEVICE_INFORMATION
     // TODO: rename as SubmittedReqListHead
     LIST_ENTRY                  ReplyListHead;
     KSPIN_LOCK                  ReplyListLock;
+
+    KSEMAPHORE                  RequestSemaphore;
 
     KEVENT                      DeviceEvent;
     KEVENT                      DeviceEventReply;

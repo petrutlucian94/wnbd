@@ -276,11 +276,16 @@ WnbdProcessDeviceThreadRequests(_In_ PSCSI_DEVICE_INFORMATION DeviceInformation)
         PCDB Cdb = (PCDB)&Element->Srb->Cdb;
         WNBD_LOG_INFO("Processing request. Address: %p Tag: 0x%llx",
                       Status, Element->Srb, Element->Tag);
+
         switch (Cdb->AsByte[0]) {
         case SCSIOP_READ6:
         case SCSIOP_READ:
         case SCSIOP_READ12:
         case SCSIOP_READ16:
+            KeWaitForSingleObject(&DeviceInformation->RequestSemaphore, Executive, KernelMode, FALSE, NULL);
+            if(DeviceInformation->SoftTerminateDevice || DeviceInformation->HardTerminateDevice) {
+                return;
+            }
             Status = WnbdProcessDeviceThreadRequestsReads(DeviceInformation, Element);
             break;
 
@@ -288,6 +293,10 @@ WnbdProcessDeviceThreadRequests(_In_ PSCSI_DEVICE_INFORMATION DeviceInformation)
         case SCSIOP_WRITE:
         case SCSIOP_WRITE12:
         case SCSIOP_WRITE16:
+            KeWaitForSingleObject(&DeviceInformation->RequestSemaphore, Executive, KernelMode, FALSE, NULL);
+            if(DeviceInformation->SoftTerminateDevice || DeviceInformation->HardTerminateDevice) {
+                return;
+            }
             Status = WnbdProcessDeviceThreadRequestsWrites(DeviceInformation, Element);
             break;
 
@@ -358,6 +367,7 @@ WnbdDeviceRequestThread(_In_ PVOID Context)
 
         WnbdProcessDeviceThreadRequests(DeviceInformation);
 
+        // TODO: why do we have two separate flags? Those seem to be the same.
         if (DeviceInformation->SoftTerminateDevice) {
             WNBD_LOG_INFO("Soft terminate thread: %p", DeviceInformation);
             PsTerminateSystemThread(STATUS_SUCCESS);
@@ -508,6 +518,7 @@ WnbdProcessDeviceThreadReplies(_In_ PSCSI_DEVICE_INFORMATION DeviceInformation)
     else {
         WNBD_LOG_LOUD("Successfully completed request %p 0x%llx.",
                       Element->Srb, Element->Tag);
+        KeReleaseSemaphore(&DeviceInformation->RequestSemaphore, 0, 1, FALSE);
     }
     KeReleaseSpinLock(&DeviceInformation->StatsLock, Irql);
 

@@ -29,7 +29,7 @@ RbdReadExact(_In_ INT Fd,
     PUCHAR Temp = Data;
     while (0 < Length) {
         WNBD_LOG_INFO("Size to read = %lu", Length);
-        Result = Recv(Fd, Temp, Length, 0, error);
+        Result = Recv(Fd, Temp, Length, WSK_FLAG_WAITALL, error);
         if (Result > 0) {
             Length -= Result;
             Temp = Temp + Result;
