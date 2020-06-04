@@ -156,6 +156,9 @@ WnbdInitializeScsiInfo(_In_ PSCSI_DEVICE_INFORMATION ScsiInfo)
     InitializeListHead(&ScsiInfo->RequestListHead);
     KeInitializeSpinLock(&ScsiInfo->RequestListLock);
     KeInitializeSpinLock(&ScsiInfo->StatsLock);
+    // TODO: consider increasing the maximum value if this becomes configurable.
+    KeInitializeSemaphore(&ScsiInfo->RequestSemaphore, MAX_IN_FLIGHT_REQUESTS,
+                          MAX_IN_FLIGHT_REQUESTS);
     InitializeListHead(&ScsiInfo->ReplyListHead);
     KeInitializeSpinLock(&ScsiInfo->ReplyListLock);
     KeInitializeEvent(&ScsiInfo->DeviceEvent, SynchronizationEvent, FALSE);
