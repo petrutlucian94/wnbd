@@ -51,7 +51,8 @@ typedef struct _SCSI_DEVICE_INFORMATION
     KSEMAPHORE                  RequestSemaphore;
 
     KEVENT                      DeviceEvent;
-    KEVENT                      DeviceEventReply;
+    // TODO: rename as DeviceReplySemaphore
+    KSEMAPHORE                  DeviceEventReply;
     PVOID                       DeviceRequestThread;
     PVOID                       DeviceReplyThread;
     BOOLEAN                     HardTerminateDevice;

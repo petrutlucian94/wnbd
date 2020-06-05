@@ -326,7 +326,7 @@ WnbdProcessDeviceThreadRequests(_In_ PSCSI_DEVICE_INFORMATION DeviceInformation)
                 &Element->Link, &DeviceInformation->ReplyListLock);
             WNBD_LOG_LOUD("Pending request. Address: %p Tag: 0x%llx",
                           Element->Srb, Element->Tag);
-            KeSetEvent(&DeviceInformation->DeviceEventReply, (KPRIORITY)0, FALSE);
+            KeReleaseSemaphore(&DeviceInformation->DeviceEventReply, 0, 1, FALSE);
         } else {
             Element->Srb->DataTransferLength = 0;
             Element->Srb->SrbStatus = SRB_STATUS_TIMEOUT;
@@ -456,6 +456,7 @@ WnbdProcessDeviceThreadReplies(_In_ PSCSI_DEVICE_INFORMATION DeviceInformation)
     KIRQL Irql = { 0 };
     /* We need this event to make sure we have something in the queue */
     /* */
+    // TODO: is it ok if this blocks while we're trying to reset the device?
     KeWaitForSingleObject(&DeviceInformation->DeviceEventReply, Executive, KernelMode, FALSE, NULL);
     KeAcquireSpinLock(&DeviceInformation->ReplyListLock, &Irql);
     LIST_FORALL_SAFE(&DeviceInformation->ReplyListHead, ItemLink, ItemNext) {

@@ -165,7 +165,7 @@ WnbdInitializeScsiInfo(_In_ PSCSI_DEVICE_INFORMATION ScsiInfo)
     KeInitializeSpinLock(&ScsiInfo->ReplyListLock);
     KeInitializeEvent(&ScsiInfo->DeviceEvent, SynchronizationEvent, FALSE);
     /* The following is to avoid lazy polling, I'm not sure if we should do lazy polling */
-    KeInitializeEvent(&ScsiInfo->DeviceEventReply, SynchronizationEvent, FALSE);
+    KeInitializeSemaphore(&ScsiInfo->DeviceEventReply, 0, 1 << 30);
 
     ScsiInfo->HardTerminateDevice = FALSE;
     ScsiInfo->SoftTerminateDevice = FALSE;
