@@ -48,6 +48,10 @@ WnbdDeleteScsiInformation(_In_ PVOID ScsiInformation)
         ScsiInfo->UserEntry = NULL;
     }
 
+    if (ScsiInfo->PreallocatedBuffer) {
+        ExFreePool(ScsiInfo->PreallocatedBuffer);
+        ScsiInfo->PreallocatedBuffer = NULL;
+    }
 
     if (-1 != ScsiInfo->Socket) {
         WNBD_LOG_INFO("Closing socket FD: %d", ScsiInfo->Socket);
@@ -389,8 +393,6 @@ WnbdDeviceReplyThread(_In_ PVOID Context)
     KeSetPriorityThread(KeGetCurrentThread(), LOW_REALTIME_PRIORITY);
 
     while (TRUE) {
-        /* We need this event to avoid lazy polling */
-        KeWaitForSingleObject(&DeviceInformation->DeviceEventReply, Executive, KernelMode, FALSE, NULL);
 
         if (DeviceInformation->HardTerminateDevice) {
             WNBD_LOG_INFO("Hard terminate thread: %p", DeviceInformation);
@@ -437,9 +439,10 @@ WnbdProcessDeviceThreadReplies(_In_ PSCSI_DEVICE_INFORMATION DeviceInformation)
     PVOID SrbBuff = NULL, TempBuff = NULL;
     NTSTATUS error = STATUS_SUCCESS;
     /* Check if the reply list is empty before trying anything else */
-    if (-1 == DeviceInformation->Socket || IsListEmpty(&DeviceInformation->ReplyListHead)) {
+
+    /*if (-1 == DeviceInformation->Socket || IsListEmpty(&DeviceInformation->ReplyListHead)) {
         return;
-    }
+    }*/
     Status = NbdReadReply(DeviceInformation->Socket, &Reply);
     if (Status) {
         CloseConnection(DeviceInformation);
@@ -451,6 +454,9 @@ WnbdProcessDeviceThreadReplies(_In_ PSCSI_DEVICE_INFORMATION DeviceInformation)
     // Other elements can be inserted, we need a lock to perform the lookup
     PLIST_ENTRY ItemLink, ItemNext;
     KIRQL Irql = { 0 };
+    /* We need this event to make sure we have something in the queue */
+    /* */
+    KeWaitForSingleObject(&DeviceInformation->DeviceEventReply, Executive, KernelMode, FALSE, NULL);
     KeAcquireSpinLock(&DeviceInformation->ReplyListLock, &Irql);
     LIST_FORALL_SAFE(&DeviceInformation->ReplyListHead, ItemLink, ItemNext) {
         Element = CONTAINING_RECORD(ItemLink, SRB_QUEUE_ELEMENT, Link);
@@ -484,11 +490,17 @@ WnbdProcessDeviceThreadReplies(_In_ PSCSI_DEVICE_INFORMATION DeviceInformation)
 
     if(IsReadSrb(Element->Srb)) {
         // Preallocate the buffer?
-        TempBuff = NbdMalloc(Element->ReadLength);
-        if (!TempBuff) {
-            Status = STATUS_INSUFFICIENT_RESOURCES;
-            CloseConnection(DeviceInformation);
-            goto Exit;
+        if (Element->ReadLength > MEM_SIZE) {
+            TempBuff = NbdMalloc(Element->ReadLength);
+            if (!TempBuff) {
+                Status = STATUS_INSUFFICIENT_RESOURCES;
+                CloseConnection(DeviceInformation);
+                goto Exit;
+            }
+            ExFreePool(DeviceInformation->PreallocatedBuffer);
+            DeviceInformation->PreallocatedBuffer = TempBuff;
+        } else {
+            TempBuff = DeviceInformation->PreallocatedBuffer;
         }
 
         if (-1 == RbdReadExact(DeviceInformation->Socket, TempBuff, Element->ReadLength, &error)) {
@@ -523,9 +535,9 @@ WnbdProcessDeviceThreadReplies(_In_ PSCSI_DEVICE_INFORMATION DeviceInformation)
     KeReleaseSpinLock(&DeviceInformation->StatsLock, Irql);
 
 Exit:
-    if(TempBuff) {
+    /*if(TempBuff) {
         NbdFree(TempBuff);
-    }
+    }*/
     InterlockedDecrement(&DeviceInformation->Device->OutstandingIoCount);
     if (Element) {
         if(!Element->Aborted) {
