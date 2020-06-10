@@ -458,11 +458,7 @@ WnbdDeleteConnection(PGLOBAL_INFORMATION GInfo,
         Timeout.QuadPart = (-1 * 1000 * 10000);
         KeWaitForSingleObject(ScsiInfo->DeviceRequestThread, Executive, KernelMode, FALSE, &Timeout);
         KeWaitForSingleObject(ScsiInfo->DeviceReplyThread, Executive, KernelMode, FALSE, &Timeout);
-        if (-1 != ScsiInfo->Socket) {
-            WNBD_LOG_INFO("Closing socket FD: %d", ScsiInfo->Socket);
-            Close(ScsiInfo->Socket);
-            ScsiInfo->Socket = -1;
-        }
+        CloseConnection(ScsiInfo);
         ObDereferenceObject(ScsiInfo->DeviceRequestThread);
         ObDereferenceObject(ScsiInfo->DeviceReplyThread);
 
