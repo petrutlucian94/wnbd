@@ -62,22 +62,26 @@ VOID SendAbortFailedForQueue(PLIST_ENTRY ListHead, PKSPIN_LOCK ListLock,
 
         Element->Srb->DataTransferLength = 0;
         Element->Srb->SrbStatus = SRB_STATUS_ABORTED;
-        Element->Aborted = 1;
 
-        WNBD_LOG_INFO("Notifying StorPort of completion of %p 0x%llx status: 0x%x(%s)",
+        // If it's marked as aborted, it means that Storport was already notified.
+        // Double completion leads to a crash.
+        if(!Element->Aborted) {
+            WNBD_LOG_INFO("Notifying StorPort of completion of %p 0x%llx status: 0x%x(%s)",
             Element->Srb, Element->Tag, Element->Srb->SrbStatus,
             WnbdToStringSrbStatus(Element->Srb->SrbStatus));
-        StorPortNotification(RequestComplete, Element->DeviceExtension,
-                             Element->Srb);
+            StorPortNotification(RequestComplete, Element->DeviceExtension,
+                                 Element->Srb);
+            Element->Aborted = 1;\
 
-        KIRQL Irql2 = { 0 };
-        // TODO: consider using InterlockedIncrement.
-        KeAcquireSpinLock(&DeviceInformation->StatsLock, &Irql2);
-        DeviceInformation->Stats.AbortedSubmittedIORequests += 1;
-        KeReleaseSpinLock(&DeviceInformation->StatsLock, Irql2);
+            KIRQL Irql2 = { 0 };
+            // TODO: consider using InterlockedIncrement.
+            KeAcquireSpinLock(&DeviceInformation->StatsLock, &Irql2);
+            DeviceInformation->Stats.AbortedSubmittedIORequests += 1;
+            KeReleaseSpinLock(&DeviceInformation->StatsLock, Irql2);
 
-        // TODO: should we release the semaphore for aborted but still pending requests?
-        KeReleaseSemaphore(&DeviceInformation->RequestSemaphore, 0, 1, FALSE);
+            // TODO: should we release the semaphore for aborted but still pending requests?
+            KeReleaseSemaphore(&DeviceInformation->RequestSemaphore, 0, 1, FALSE);
+        }
     }
     KeReleaseSpinLock(ListLock, Irql);
 }
