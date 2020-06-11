@@ -71,7 +71,7 @@ VOID SendAbortFailedForQueue(PLIST_ENTRY ListHead, PKSPIN_LOCK ListLock,
             WnbdToStringSrbStatus(Element->Srb->SrbStatus));
             StorPortNotification(RequestComplete, Element->DeviceExtension,
                                  Element->Srb);
-            Element->Aborted = 1;\
+            Element->Aborted = 1;
 
             KIRQL Irql2 = { 0 };
             // TODO: consider using InterlockedIncrement.

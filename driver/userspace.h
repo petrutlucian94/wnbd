@@ -50,7 +50,7 @@ typedef struct _SCSI_DEVICE_INFORMATION
 
     KSEMAPHORE                  RequestSemaphore;
 
-    KEVENT                      DeviceEvent;
+    KSEMAPHORE                  DeviceEvent;
     // TODO: rename as DeviceReplySemaphore
     KSEMAPHORE                  DeviceEventReply;
     PVOID                       DeviceRequestThread;
