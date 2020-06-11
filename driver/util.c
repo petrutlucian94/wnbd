@@ -487,13 +487,16 @@ WnbdProcessDeviceThreadReplies(_In_ PSCSI_DEVICE_INFORMATION DeviceInformation)
     // TODO: can we use this buffer directly?
     // No, because of STOR_MAP_NON_READ_WRITE_BUFFERS
     ULONG StorResult;
-    StorResult = StorPortGetSystemAddress(Element->DeviceExtension, Element->Srb, &SrbBuff);
-    if (STOR_STATUS_SUCCESS != StorResult) {
-        WNBD_LOG_ERROR("Could not get SRB %p 0x%llx data buffer. Error: %d.",
-                       Element->Srb, Element->Tag, error);
-        Element->Srb->SrbStatus = SRB_STATUS_INTERNAL_ERROR;
-        CloseConnection(DeviceInformation);
-        goto Exit;
+
+    if(!Element->Aborted) {
+        StorResult = StorPortGetSystemAddress(Element->DeviceExtension, Element->Srb, &SrbBuff);
+        if (STOR_STATUS_SUCCESS != StorResult) {
+            WNBD_LOG_ERROR("Could not get SRB %p 0x%llx data buffer. Error: %d.",
+                           Element->Srb, Element->Tag, error);
+            Element->Srb->SrbStatus = SRB_STATUS_INTERNAL_ERROR;
+            CloseConnection(DeviceInformation);
+            goto Exit;
+        }
     }
 
     if(IsReadSrb(Element->Srb)) {
@@ -520,7 +523,9 @@ WnbdProcessDeviceThreadReplies(_In_ PSCSI_DEVICE_INFORMATION DeviceInformation)
             CloseConnection(DeviceInformation);
             goto Exit;
         } else {
-            RtlCopyMemory(SrbBuff, TempBuff, Element->ReadLength);
+            if(!Element->Aborted) {
+                RtlCopyMemory(SrbBuff, TempBuff, Element->ReadLength);
+            }
         }
     }
     // TODO: rename ReadLength to DataLength

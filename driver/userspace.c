@@ -163,7 +163,7 @@ WnbdInitializeScsiInfo(_In_ PSCSI_DEVICE_INFORMATION ScsiInfo)
                           MAX_IN_FLIGHT_REQUESTS);
     InitializeListHead(&ScsiInfo->ReplyListHead);
     KeInitializeSpinLock(&ScsiInfo->ReplyListLock);
-    KeInitializeEvent(&ScsiInfo->DeviceEvent, SynchronizationEvent, FALSE);
+    KeInitializeSemaphore(&ScsiInfo->DeviceEvent, 0, 1 << 30);
     /* The following is to avoid lazy polling, I'm not sure if we should do lazy polling */
     KeInitializeSemaphore(&ScsiInfo->DeviceEventReply, 0, 1 << 30);
 
@@ -225,7 +225,7 @@ SoftTerminate:
     if(reply_thread_handle)
         ZwClose(reply_thread_handle);
     ScsiInfo->SoftTerminateDevice = TRUE;
-    KeSetEvent(&ScsiInfo->DeviceEvent, (KPRIORITY)0, FALSE);
+    KeReleaseSemaphore(&ScsiInfo->DeviceEvent, 0, 1, FALSE);
     Status = STATUS_INSUFFICIENT_RESOURCES;
     goto Exit;
 }
@@ -460,7 +460,7 @@ WnbdDeleteConnection(PGLOBAL_INFORMATION GInfo,
         TargetIndex = ScsiInfo->TargetIndex;
         BusIndex = ScsiInfo->BusIndex;
         ScsiInfo->SoftTerminateDevice = TRUE;
-        KeSetEvent(&ScsiInfo->DeviceEvent, (KPRIORITY)0, FALSE);
+        KeReleaseSemaphore(&ScsiInfo->DeviceEvent, 0, 1, FALSE);
         LARGE_INTEGER Timeout;
         Timeout.QuadPart = (-1 * 1000 * 10000);
         KeWaitForSingleObject(ScsiInfo->DeviceRequestThread, Executive, KernelMode, FALSE, &Timeout);
