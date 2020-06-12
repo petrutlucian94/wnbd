@@ -437,9 +437,9 @@ WnbdHwStartIo(PVOID DeviceExtension,
         SrbStatus = WnbdExecuteScsiFunction(Ext, Srb, &Complete);
         break;
 
-    // case SRB_FUNCTION_RESET_LOGICAL_UNIT:
-    //     SrbStatus = WnbdResetLogicalUnitFunction(Ext, Srb);
-    //     break;
+    case SRB_FUNCTION_RESET_LOGICAL_UNIT:
+        SrbStatus = WnbdResetLogicalUnitFunction(Ext, Srb);
+        break;
 
     case SRB_FUNCTION_RESET_DEVICE:
         SrbStatus = WnbdResetDeviceFunction(Ext, Srb);
