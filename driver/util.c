@@ -251,13 +251,33 @@ WnbdProcessDeviceThreadRequestsWrites(_In_ PSCSI_DEVICE_INFORMATION DeviceInform
     WNBD_LOG_LOUD(": Exit");
     return Status;
 }
-
+/*
+VOID CloseConnection2(_In_ PSCSI_DEVICE_INFORMATION DeviceInformation) {
+    KeEnterCriticalRegion();
+    ExAcquireResourceExclusiveLite(
+        &DeviceInformation->GlobalInformation->ConnectionMutex, TRUE);
+    if (-1 != DeviceInformation->SocketToClose) {
+        WNBD_LOG_INFO("Closing socket FD: %d", DeviceInformation->Socket);
+        if (-1 != DeviceInformation->Socket) {
+            Close(DeviceInformation->Socket);
+        } else {
+            Close(DeviceInformation->SocketToClose);
+        }
+        DeviceInformation->Socket = -1;
+        DeviceInformation->SocketToClose = -1;
+        DeviceInformation->Device->Missing = TRUE;
+    }
+    ExReleaseResourceLite(&DeviceInformation->GlobalInformation->ConnectionMutex);
+    KeLeaveCriticalRegion();
+}
+*/
 VOID CloseConnection(_In_ PSCSI_DEVICE_INFORMATION DeviceInformation) {
     KeEnterCriticalRegion();
     ExAcquireResourceExclusiveLite(
         &DeviceInformation->GlobalInformation->ConnectionMutex, TRUE);
     if (-1 != DeviceInformation->Socket) {
         WNBD_LOG_INFO("Closing socket FD: %d", DeviceInformation->Socket);
+        //DeviceInformation->SocketToClose = DeviceInformation->Socket;
         Close(DeviceInformation->Socket);
         DeviceInformation->Socket = -1;
         DeviceInformation->Device->Missing = TRUE;
@@ -453,6 +473,11 @@ WnbdProcessDeviceThreadReplies(_In_ PSCSI_DEVICE_INFORMATION DeviceInformation)
     Status = NbdReadReply(DeviceInformation->Socket, &Reply);
     if (Status) {
         CloseConnection(DeviceInformation);
+        //Sleep for a bit to not have a lazy poll here since the connection could already be closed
+        // until the device is actually removed
+        LARGE_INTEGER Timeout;
+        Timeout.QuadPart = (-1 * 100 * 10000);
+        KeDelayExecutionThread(KernelMode, FALSE, &Timeout);
         return;
     }
     // TODO: check how can we avoid the situation in which we're looping over
