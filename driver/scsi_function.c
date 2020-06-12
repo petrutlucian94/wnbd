@@ -132,8 +132,12 @@ UCHAR DrainDeviceQueues(PVOID DeviceExtension,
         goto Exit;
     }
     if (Device->Missing) {
+        PSCSI_DEVICE_INFORMATION Info = (PSCSI_DEVICE_INFORMATION)Device->ScsiDeviceExtension;
         WNBD_LOG_WARN("%p is marked for deletion. PathId = %d. TargetId = %d. LUN = %d",
             Device, Srb->PathId, Srb->TargetId, Srb->Lun);
+        /// Drain the queue here because the device doesn't theoretically exist;
+        DrainDeviceQueue(Device, &Info->RequestListHead, &Info->RequestListLock, Info);
+        DrainDeviceQueue(Device, &Info->ReplyListHead, &Info->ReplyListLock, Info);
         goto Exit;
     }
     PSCSI_DEVICE_INFORMATION Info = (PSCSI_DEVICE_INFORMATION)Device->ScsiDeviceExtension;
