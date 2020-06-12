@@ -226,10 +226,10 @@ KspAsyncContextWaitForCompletion(
     _Inout_ PNTSTATUS Status
 )
 {
-    /* Timeout default value of 30 seconds */
+    /* Timeout default value of 120 seconds */
     // TODO make the timeout configurable
     LARGE_INTEGER	Timeout;
-    Timeout.QuadPart = (-5 * 1000 * 10000);
+    Timeout.QuadPart = (-120 * 1000 * 10000);
     if (*Status == STATUS_PENDING)
     {
         KeWaitForSingleObject(
@@ -237,7 +237,7 @@ KspAsyncContextWaitForCompletion(
             Executive,
             KernelMode,
             FALSE,
-            &Timeout
+            NULL
         );
 
         *Status = AsyncContext->Irp->IoStatus.Status;
