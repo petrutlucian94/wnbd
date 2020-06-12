@@ -208,7 +208,7 @@ WnbdInitializeScsiInfo(_In_ PSCSI_DEVICE_INFORMATION ScsiInfo)
     Status = ObReferenceObjectByHandle(reply_thread_handle, THREAD_ALL_ACCESS, NULL, KernelMode,
         &ScsiInfo->DeviceReplyThread, NULL);
 
-    memset(&ScsiInfo->Stats, 0, sizeof(WNBD_STATS));
+    RtlZeroMemory(&ScsiInfo->Stats, sizeof(WNBD_STATS));
 
     if (!NT_SUCCESS(Status)) {
         Status = STATUS_INSUFFICIENT_RESOURCES;
@@ -435,6 +435,55 @@ WnbdSetDeviceMissing(_In_ PVOID Handle,
     return TRUE;
 }
 
+
+VOID
+WnbdDrainQueueOnClose(_In_ PSCSI_DEVICE_INFORMATION DeviceInformation)
+{
+    if (IsListEmpty(&DeviceInformation->RequestListHead))
+        goto Reply;
+    PLIST_ENTRY ItemLink, ItemNext;
+    KIRQL Irql = { 0 }, Irql1 = { 0 };
+    PSRB_QUEUE_ELEMENT Element = NULL;
+    KeAcquireSpinLock(&DeviceInformation->RequestListLock, &Irql);
+    LIST_FORALL_SAFE(&DeviceInformation->RequestListHead, ItemLink, ItemNext) {
+        Element = CONTAINING_RECORD(ItemLink, SRB_QUEUE_ELEMENT, Link);
+        if (Element) {
+            RemoveEntryList(&Element->Link);
+            Element->Srb->DataTransferLength = 0;
+            Element->Srb->SrbStatus = SRB_STATUS_INTERNAL_ERROR;
+            StorPortNotification(RequestComplete, Element->DeviceExtension,
+                Element->Srb);
+            ExFreePool(Element);
+        }
+        Element = NULL;
+    }
+    KeReleaseSpinLock(&DeviceInformation->RequestListLock, Irql);
+Reply:
+    if (IsListEmpty(&DeviceInformation->ReplyListHead))
+        return;
+    KeAcquireSpinLock(&DeviceInformation->ReplyListLock, &Irql);
+    LIST_FORALL_SAFE(&DeviceInformation->ReplyListHead, ItemLink, ItemNext) {
+
+        Element = CONTAINING_RECORD(ItemLink, SRB_QUEUE_ELEMENT, Link);
+        if (Element) {
+            RemoveEntryList(&Element->Link);
+            KeAcquireSpinLock(&DeviceInformation->StatsLock, &Irql1);
+            DeviceInformation->Stats.TotalReceivedIOReplies += 1;
+            DeviceInformation->Stats.PendingSubmittedIORequests -= 1;
+            KeReleaseSpinLock(&DeviceInformation->StatsLock, Irql1);
+            if (!Element->Aborted) {
+                Element->Srb->DataTransferLength = 0;
+                Element->Srb->SrbStatus = SRB_STATUS_INTERNAL_ERROR;
+                StorPortNotification(RequestComplete, Element->DeviceExtension,
+                    Element->Srb);
+            }
+            ExFreePool(Element);
+        }
+        Element = NULL;
+    }
+    KeReleaseSpinLock(&DeviceInformation->ReplyListLock, Irql);
+}
+
 _Use_decl_annotations_
 NTSTATUS
 WnbdDeleteConnection(PGLOBAL_INFORMATION GInfo,
@@ -465,9 +514,11 @@ WnbdDeleteConnection(PGLOBAL_INFORMATION GInfo,
         Timeout.QuadPart = (-1 * 1000 * 10000);
         KeWaitForSingleObject(ScsiInfo->DeviceRequestThread, Executive, KernelMode, FALSE, &Timeout);
         KeWaitForSingleObject(ScsiInfo->DeviceReplyThread, Executive, KernelMode, FALSE, &Timeout);
-        CloseConnection(ScsiInfo);
         ObDereferenceObject(ScsiInfo->DeviceRequestThread);
         ObDereferenceObject(ScsiInfo->DeviceReplyThread);
+        WnbdDrainQueueOnClose(ScsiInfo);
+        //CloseConnection2(ScsiInfo);
+        CloseConnection(ScsiInfo);
 
         if(!WnbdSetDeviceMissing(ScsiInfo->Device,TRUE)) {
             WNBD_LOG_WARN("Could not delete media because it is still in use.");
