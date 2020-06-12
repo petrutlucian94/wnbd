@@ -46,6 +46,7 @@ IsReadSrb(_In_ PSCSI_REQUEST_BLOCK Srb);
 VOID
 WnbdProcessDeviceThreadReplies(_In_ PSCSI_DEVICE_INFORMATION DeviceInformation);
 VOID CloseConnection(_In_ PSCSI_DEVICE_INFORMATION DeviceInformation);
+VOID CloseConnection2(_In_ PSCSI_DEVICE_INFORMATION DeviceInformation);
 
 #define LIST_FORALL_SAFE(_headPtr, _itemPtr, _nextPtr)                \
     for (_itemPtr = (_headPtr)->Flink, _nextPtr = (_itemPtr)->Flink;  \
