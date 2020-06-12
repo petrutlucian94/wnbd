@@ -424,13 +424,13 @@ WnbdHandleSrbOperation(PVOID DeviceExtension,
     PCDB Cdb = (PCDB) &Srb->Cdb;
     NTSTATUS status = STATUS_SUCCESS;
     PSCSI_DEVICE_INFORMATION Info = (PSCSI_DEVICE_INFORMATION)ScsiDeviceExtension;
-    UINT16 BlockSize = Info->UserEntry->BlockSize;
-    UINT64 BlockCount = WnbdGetBlockCount(Info->UserEntry->DiskSize, BlockSize);
-
-    if (Info->SoftTerminateDevice || Info->HardTerminateDevice) {
+    if (!Info || !Info->UserEntry || Info->SoftTerminateDevice || Info->HardTerminateDevice) {
         Srb->SrbStatus = SRB_STATUS_INVALID_REQUEST;
         return status;
     }
+    UINT16 BlockSize = Info->UserEntry->BlockSize;
+    UINT64 BlockCount = WnbdGetBlockCount(Info->UserEntry->DiskSize, BlockSize);
+
 
     WNBD_LOG_LOUD("Processing %s command",
                   WnbdToStringSrbCdbOperation(Cdb->AsByte[0]));
