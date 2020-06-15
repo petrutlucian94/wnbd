@@ -674,6 +674,18 @@ int RecvFrom(int sockfd, void *buf, size_t len, int flags, struct sockaddr *src_
     : -1;
 }
 
+int Disconnect(int sockfd)
+{
+    NTSTATUS Status;
+    PKSOCKET Socket = KsArray[FROM_SOCKETFD(sockfd)];
+
+    Status = KsDisconnectSocket(Socket);
+
+    return NT_SUCCESS(Status)
+        ? 0
+        : -1;
+}
+
 int Close(int sockfd)
 {
   NTSTATUS Status;
