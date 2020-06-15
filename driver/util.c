@@ -251,12 +251,12 @@ WnbdProcessDeviceThreadRequestsWrites(_In_ PSCSI_DEVICE_INFORMATION DeviceInform
     WNBD_LOG_LOUD(": Exit");
     return Status;
 }
-/*
-VOID CloseConnection2(_In_ PSCSI_DEVICE_INFORMATION DeviceInformation) {
-    KeEnterCriticalRegion();
-    ExAcquireResourceExclusiveLite(
-        &DeviceInformation->GlobalInformation->ConnectionMutex, TRUE);
+
+VOID DisconnectConnection(_In_ PSCSI_DEVICE_INFORMATION DeviceInformation) {
     if (-1 != DeviceInformation->SocketToClose) {
+        KeEnterCriticalRegion();
+        ExAcquireResourceExclusiveLite(
+            &DeviceInformation->GlobalInformation->ConnectionMutex, TRUE);
         WNBD_LOG_INFO("Closing socket FD: %d", DeviceInformation->Socket);
         if (-1 != DeviceInformation->Socket) {
             Close(DeviceInformation->Socket);
@@ -266,24 +266,26 @@ VOID CloseConnection2(_In_ PSCSI_DEVICE_INFORMATION DeviceInformation) {
         DeviceInformation->Socket = -1;
         DeviceInformation->SocketToClose = -1;
         DeviceInformation->Device->Missing = TRUE;
+        ExReleaseResourceLite(&DeviceInformation->GlobalInformation->ConnectionMutex);
+        KeLeaveCriticalRegion();
     }
-    ExReleaseResourceLite(&DeviceInformation->GlobalInformation->ConnectionMutex);
-    KeLeaveCriticalRegion();
 }
-*/
+
 VOID CloseConnection(_In_ PSCSI_DEVICE_INFORMATION DeviceInformation) {
-    KeEnterCriticalRegion();
-    ExAcquireResourceExclusiveLite(
-        &DeviceInformation->GlobalInformation->ConnectionMutex, TRUE);
     if (-1 != DeviceInformation->Socket) {
+        KeEnterCriticalRegion();
+        ExAcquireResourceExclusiveLite(
+            &DeviceInformation->GlobalInformation->ConnectionMutex, TRUE);
         WNBD_LOG_INFO("Closing socket FD: %d", DeviceInformation->Socket);
-        //DeviceInformation->SocketToClose = DeviceInformation->Socket;
-        Close(DeviceInformation->Socket);
+        DeviceInformation->SocketToClose = DeviceInformation->Socket;
+        Disconnect(DeviceInformation->Socket);
         DeviceInformation->Socket = -1;
-        DeviceInformation->Device->Missing = TRUE;
+        if (DeviceInformation->Device) {
+            DeviceInformation->Device->Missing = TRUE;
+        }
+        ExReleaseResourceLite(&DeviceInformation->GlobalInformation->ConnectionMutex);
+        KeLeaveCriticalRegion();
     }
-    ExReleaseResourceLite(&DeviceInformation->GlobalInformation->ConnectionMutex);
-    KeLeaveCriticalRegion();
 }
 
 VOID
@@ -421,17 +423,12 @@ WnbdDeviceReplyThread(_In_ PVOID Context)
 
     while (TRUE) {
 
-        if (DeviceInformation->HardTerminateDevice) {
-            WNBD_LOG_INFO("Hard terminate thread: %p", DeviceInformation);
-            PsTerminateSystemThread(STATUS_SUCCESS);
-        }
-
-        WnbdProcessDeviceThreadReplies(DeviceInformation);
-
         if (DeviceInformation->SoftTerminateDevice) {
             WNBD_LOG_INFO("Soft terminate thread: %p", DeviceInformation);
             PsTerminateSystemThread(STATUS_SUCCESS);
         }
+
+        WnbdProcessDeviceThreadReplies(DeviceInformation);
     }
 }
 

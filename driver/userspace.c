@@ -511,14 +511,14 @@ WnbdDeleteConnection(PGLOBAL_INFORMATION GInfo,
         ScsiInfo->SoftTerminateDevice = TRUE;
         KeReleaseSemaphore(&ScsiInfo->DeviceEvent, 0, 1, FALSE);
         LARGE_INTEGER Timeout;
-        Timeout.QuadPart = (-1 * 1000 * 10000);
-        KeWaitForSingleObject(ScsiInfo->DeviceRequestThread, Executive, KernelMode, FALSE, &Timeout);
+        Timeout.QuadPart = (-120 * 1000 * 10000);
+        CloseConnection(ScsiInfo);
+        KeWaitForSingleObject(ScsiInfo->DeviceRequestThread, Executive, KernelMode, FALSE, NULL);
         KeWaitForSingleObject(ScsiInfo->DeviceReplyThread, Executive, KernelMode, FALSE, &Timeout);
         ObDereferenceObject(ScsiInfo->DeviceRequestThread);
         ObDereferenceObject(ScsiInfo->DeviceReplyThread);
         WnbdDrainQueueOnClose(ScsiInfo);
-        //CloseConnection2(ScsiInfo);
-        CloseConnection(ScsiInfo);
+        DisconnectConnection(ScsiInfo);
 
         if(!WnbdSetDeviceMissing(ScsiInfo->Device,TRUE)) {
             WNBD_LOG_WARN("Could not delete media because it is still in use.");

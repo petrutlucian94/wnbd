@@ -478,6 +478,39 @@ KsCreateDatagramSocket(
   return KsCreateSocket(Socket, AddressFamily, SocketType, Protocol, WSK_FLAG_DATAGRAM_SOCKET);
 }
 
+
+NTSTATUS
+NTAPI
+KsDisconnectSocket(
+    _In_ PKSOCKET Socket
+)
+{
+    NTSTATUS Status = STATUS_UNSUCCESSFUL;
+
+    KSOCKET_ASYNC_CONTEXT AsyncContext;
+    Status = KspAsyncContextAllocate(&AsyncContext);
+
+    if (!NT_SUCCESS(Status))
+    {
+        KspAsyncContextFree(&AsyncContext);
+        return Status;
+    }
+
+    //
+    // Close the WSK socket.
+    //
+    Status = Socket->WskConnectionDispatch->WskDisconnect(
+        Socket->WskSocket,
+        NULL,
+        0,
+        AsyncContext.Irp
+    );
+    KspAsyncContextWaitForCompletion(&AsyncContext, &Status);
+    KspAsyncContextFree(&AsyncContext);
+
+    return Status;
+}
+
 NTSTATUS
 NTAPI
 KsCloseSocket(
@@ -486,27 +519,37 @@ KsCloseSocket(
 {
     NTSTATUS Status = STATUS_UNSUCCESSFUL;
 
-    PIRP Irp = ExAllocatePoolWithTag(NonPagedPoolNx, IoSizeOfIrp(1), MEMORY_TAG);;
+    KSOCKET_ASYNC_CONTEXT AsyncContext;
+    Status = KspAsyncContextAllocate(&AsyncContext);
+
+    if (!NT_SUCCESS(Status))
+    {
+        KspAsyncContextFree(&AsyncContext);
+        return Status;
+    }
+
+    /*PIRP Irp = ExAllocatePoolWithTag(NonPagedPoolNx, IoSizeOfIrp(1), MEMORY_TAG);;
     if (!Irp) {
         return STATUS_INSUFFICIENT_RESOURCES;
     }
     IoInitializeIrp(Irp, IoSizeOfIrp(1), 1);
-    IoSetCompletionRoutine(Irp, KspNoWaitCompletionRoutine, NULL, TRUE, TRUE, TRUE);
+    IoSetCompletionRoutine(Irp, KspNoWaitCompletionRoutine, NULL, TRUE, TRUE, TRUE);*/
 
     //
     // Close the WSK socket.
     //
     Status = Socket->WskConnectionDispatch->WskCloseSocket(
         Socket->WskSocket,
-        Irp
+        AsyncContext.Irp
     );
-
+    KspAsyncContextWaitForCompletion(&AsyncContext, &Status);
     //
     // Free the async context.
     //
 
     KspAsyncContextFree(&Socket->AsyncContextRead);
     KspAsyncContextFree(&Socket->AsyncContextWrite);
+    KspAsyncContextFree(&AsyncContext);
 
     //
     // Free memory for the socket structure.
