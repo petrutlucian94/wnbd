@@ -35,6 +35,7 @@ RbdReadExact(_In_ INT Fd,
             Temp = Temp + Result;
         } else {
             WNBD_LOG_ERROR("Failed with : %d", Result);
+            *error = STATUS_CONNECTION_DISCONNECTED;
             return -1;
         }
     }
@@ -61,6 +62,7 @@ RbdWriteExact(_In_ INT Fd,
         Result = Send(Fd, Temp, Length, 0, error);
         if (Result <= 0) {
             WNBD_LOG_ERROR("Failed with : %d", Result);
+            *error = STATUS_CONNECTION_DISCONNECTED;
             return -1;
         }
         Length -= Result;
