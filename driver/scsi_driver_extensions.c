@@ -113,9 +113,10 @@ WnbdHwFindAdapter(PVOID DeviceExtension,
     /*
      * https://docs.microsoft.com/en-us/previous-versions/windows/hardware/drivers/ff563901(v%3Dvs.85)
      */
-    ConfigInfo->MaximumTransferLength = SP_UNINITIALIZED_VALUE;
+    ConfigInfo->MaximumTransferLength = 0x100000;
     ConfigInfo->NumberOfPhysicalBreaks = SP_UNINITIALIZED_VALUE;
-    ConfigInfo->AlignmentMask = FILE_BYTE_ALIGNMENT;
+    ConfigInfo->AlignmentMask = FILE_LONG_ALIGNMENT;
+    ConfigInfo->Dma32BitAddresses = TRUE;
     ConfigInfo->NumberOfBuses = MAX_NUMBER_OF_SCSI_BUSES;
     ConfigInfo->ScatterGather = TRUE;
     ConfigInfo->Master = TRUE;
