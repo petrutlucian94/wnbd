@@ -396,6 +396,13 @@ WnbdPendOperation(_In_ PVOID DeviceExtension,
         UINT32 Access = 0;
         SrbCdbGetRange(Cdb, &BlockAddress, &BlockCount, &Access);
         DataLength = BlockCount * ScsiInfo->UserEntry->BlockSize;
+        if (DataLength < Srb->DataTransferLength &&
+            (Cdb->AsByte[0] != SCSIOP_SYNCHRONIZE_CACHE || Cdb->AsByte[0] != SCSIOP_SYNCHRONIZE_CACHE16)) {
+            WNBD_LOG_ERROR("STATUS_BUFFER_TOO_SMALL");
+            Srb->SrbStatus = SRB_STATUS_ABORTED;
+            Status = STATUS_BUFFER_TOO_SMALL;
+            break;
+        }
         Status = WnbdPendElement(DeviceExtension, ScsiDeviceExtension, Srb,
             BlockAddress * ScsiInfo->UserEntry->BlockSize, DataLength);
         }
