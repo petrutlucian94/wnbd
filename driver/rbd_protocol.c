@@ -422,7 +422,7 @@ NbdWriteStat(INT Fd,
              ULONG Length,
              PNTSTATUS IoStatus,
              PVOID SystemBuffer,
-             PVOID PreallocatedBuffer,
+             PVOID *PreallocatedBuffer,
              PULONG PreallocatedLength,
              UINT64 Handle)
 {
@@ -452,9 +452,9 @@ NbdWriteStat(INT Fd,
             Status = STATUS_INSUFFICIENT_RESOURCES;
             goto Exit;
         }
-        ExFreePool(PreallocatedBuffer);
+        ExFreePool(*PreallocatedBuffer);
         *PreallocatedLength = Needed;
-        PreallocatedBuffer = Buf;
+        *PreallocatedBuffer = Buf;
     }
 
     if (-1 == Fd) {
@@ -463,11 +463,11 @@ NbdWriteStat(INT Fd,
         goto Exit;
     }
 #pragma warning(disable:6386)
-    RtlCopyMemory(PreallocatedBuffer, &Request, sizeof(NBD_REQUEST));
+    RtlCopyMemory(*PreallocatedBuffer, &Request, sizeof(NBD_REQUEST));
 #pragma warning(default:6386)
-    RtlCopyMemory(((PCHAR)PreallocatedBuffer + sizeof(NBD_REQUEST)), SystemBuffer, Length);
+    RtlCopyMemory(((PCHAR)*PreallocatedBuffer + sizeof(NBD_REQUEST)), SystemBuffer, Length);
 
-    if (-1 == RbdWriteExact(Fd, PreallocatedBuffer, sizeof(NBD_REQUEST) + Length, &error)) {
+    if (-1 == RbdWriteExact(Fd, *PreallocatedBuffer, sizeof(NBD_REQUEST) + Length, &error)) {
         WNBD_LOG_ERROR("Could not send request for NBD_CMD_WRITE");
         Status = error;
         goto Exit;

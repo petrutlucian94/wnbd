@@ -11,12 +11,13 @@
 #include "driver_extension.h"
 #include "scsi_driver_extensions.h"
 #include "userspace_shared.h"
+#include "rbd_protocol.h"
 
 // TODO: make this configurable.
-#define MAX_IN_FLIGHT_REQUESTS 255
+#define WNBD_MAX_IN_FLIGHT_REQUESTS 255
 // For transfers larger than 32MB, we'll receive 0 sized buffers.
-#define MAX_TRANSFER_LENGTH 2 * 1024 * 1024
-#define PREALLOC_BUFF_SZ MAX_TRANSFER_LENGTH
+#define WNBD_MAX_TRANSFER_LENGTH 2 * 1024 * 1024
+#define WNBD_PREALLOC_BUFF_SZ (WNBD_MAX_TRANSFER_LENGTH + sizeof(NBD_REQUEST))
 
 typedef struct _USER_ENTRY {
     LIST_ENTRY                         ListEntry;

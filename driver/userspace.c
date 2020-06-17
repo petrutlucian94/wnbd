@@ -158,8 +158,9 @@ WnbdInitializeScsiInfo(_In_ PSCSI_DEVICE_INFORMATION ScsiInfo)
     InitializeListHead(&ScsiInfo->RequestListHead);
     KeInitializeSpinLock(&ScsiInfo->RequestListLock);
     // TODO: consider increasing the maximum value if this becomes configurable.
-    KeInitializeSemaphore(&ScsiInfo->RequestSemaphore, MAX_IN_FLIGHT_REQUESTS,
-                          MAX_IN_FLIGHT_REQUESTS);
+    KeInitializeSemaphore(&ScsiInfo->RequestSemaphore,
+                          WNBD_MAX_IN_FLIGHT_REQUESTS,
+                          WNBD_MAX_IN_FLIGHT_REQUESTS);
     InitializeListHead(&ScsiInfo->ReplyListHead);
     KeInitializeSpinLock(&ScsiInfo->ReplyListLock);
     KeInitializeSemaphore(&ScsiInfo->DeviceEvent, 0, 1 << 30);
@@ -168,18 +169,18 @@ WnbdInitializeScsiInfo(_In_ PSCSI_DEVICE_INFORMATION ScsiInfo)
 
     ScsiInfo->HardTerminateDevice = FALSE;
     ScsiInfo->SoftTerminateDevice = FALSE;
-    ScsiInfo->ReadPreallocatedBuffer = MallocT(((UINT)PREALLOC_BUFF_SZ));
+    ScsiInfo->ReadPreallocatedBuffer = MallocT(((UINT)WNBD_PREALLOC_BUFF_SZ));
     if (!ScsiInfo->ReadPreallocatedBuffer) {
         Status = STATUS_INSUFFICIENT_RESOURCES;
         goto Exit;
     }
-    ScsiInfo->ReadPreallocatedBufferLength = PREALLOC_BUFF_SZ;
-    ScsiInfo->WritePreallocatedBuffer = MallocT(((UINT)PREALLOC_BUFF_SZ));
+    ScsiInfo->ReadPreallocatedBufferLength = WNBD_PREALLOC_BUFF_SZ;
+    ScsiInfo->WritePreallocatedBuffer = MallocT(((UINT)WNBD_PREALLOC_BUFF_SZ));
     if (!ScsiInfo->WritePreallocatedBuffer) {
         Status = STATUS_INSUFFICIENT_RESOURCES;
         goto Exit;
     }
-    ScsiInfo->WritePreallocatedBufferLength = PREALLOC_BUFF_SZ;
+    ScsiInfo->WritePreallocatedBufferLength = WNBD_PREALLOC_BUFF_SZ;
 
     Status = PsCreateSystemThread(&request_thread_handle, (ACCESS_MASK)0L, NULL,
                                   NULL, NULL, WnbdDeviceRequestThread, ScsiInfo);

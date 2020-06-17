@@ -229,7 +229,7 @@ WnbdProcessDeviceThreadRequestsWrites(_In_ PSCSI_DEVICE_INFORMATION DeviceInform
                      Element->ReadLength,
                      &Status,
                      Buffer,
-                     DeviceInformation->WritePreallocatedBuffer,
+                     &DeviceInformation->WritePreallocatedBuffer,
                      &DeviceInformation->WritePreallocatedBufferLength,
                      Element->Tag);
     }
