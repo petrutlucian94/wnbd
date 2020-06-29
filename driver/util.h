@@ -9,6 +9,7 @@
 
 #include "common.h"
 #include "userspace.h"
+#include "rbd_protocol.h"
 
 static const int MultiplyDeBruijnBitPosition2[32] =
 {
@@ -32,9 +33,12 @@ typedef struct _SRB_QUEUE_ELEMENT {
     PSCSI_REQUEST_BLOCK Srb;
     UINT64 StartingLbn;
     ULONG ReadLength;
+    BOOLEAN FUA;
     PVOID DeviceExtension;
     UINT64 Tag;
     BOOLEAN Aborted;
+    UINT64 RequestCount;
+    UINT64 CompletedRequestCount;
 } SRB_QUEUE_ELEMENT, * PSRB_QUEUE_ELEMENT;
 
 VOID
@@ -49,6 +53,11 @@ VOID
 WnbdProcessDeviceThreadReplies(_In_ PSCSI_DEVICE_INFORMATION DeviceInformation);
 VOID CloseConnection(_In_ PSCSI_DEVICE_INFORMATION DeviceInformation);
 VOID DisconnectConnection(_In_ PSCSI_DEVICE_INFORMATION DeviceInformation);
+int ScsiOpToNbdReqType(int ScsiOp);
+BOOLEAN ValidateScsiRequest(
+    _In_ PSCSI_DEVICE_INFORMATION DeviceInformation,
+    _In_ PSRB_QUEUE_ELEMENT Element);
+
 
 #define LIST_FORALL_SAFE(_headPtr, _itemPtr, _nextPtr)                \
     for (_itemPtr = (_headPtr)->Flink, _nextPtr = (_itemPtr)->Flink;  \

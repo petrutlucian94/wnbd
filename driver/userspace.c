@@ -324,11 +324,6 @@ WnbdCreateConnection(PGLOBAL_INFORMATION GInfo,
     }
 
     NewEntry->NbdFlags = Info->NbdFlags | RbdFlags;
-    // For convenience, we'll use another field.
-    if (NewEntry->NbdFlags & NBD_FLAG_HAS_FLAGS) {
-        NewEntry->ReadOnly = NewEntry->NbdFlags & NBD_FLAG_READ_ONLY;
-    }
-
     ULONG TargetId = bitNumber % SCSI_MAXIMUM_TARGETS_PER_BUS;
     ULONG BusId = bitNumber / MAX_NUMBER_OF_SCSI_TARGETS;
 

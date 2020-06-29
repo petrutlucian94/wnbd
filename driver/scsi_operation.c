@@ -102,6 +102,8 @@ WnbdSetVpdSupportedPages(_In_ PVOID Data,
     VpdPages->PageLength = NumberOfSupportedPages;
     VpdPages->SupportedPageList[0] = VPD_SUPPORTED_PAGES;
     VpdPages->SupportedPageList[1] = VPD_SERIAL_NUMBER;
+    VpdPages->SupportedPageList[2] = VPD_BLOCK_LIMITS;
+    VpdPages->SupportedPageList[3] = VPD_LOGICAL_BLOCK_PROVISIONING;
 
     SrbSetDataTransferLength(Srb, sizeof(VPD_SUPPORTED_PAGES_PAGE) + NumberOfSupportedPages);
 
@@ -136,6 +138,65 @@ WnbdSetVpdSerialNumber(_In_ PVOID Data,
 }
 
 UCHAR
+WnbdSetVpdBlockLimits(_In_ PVOID Data,
+                      _In_ PSCSI_DEVICE_INFORMATION Info,
+                      _In_ PSCSI_REQUEST_BLOCK Srb,
+                      _In_ UINT64 MaximumTransferLength)
+{
+    WNBD_LOG_LOUD(": Enter");
+    ASSERT(Data);
+    ASSERT(Srb);
+
+    PVPD_BLOCK_LIMITS_PAGE BlockLimits = Data;
+
+    BlockLimits->DeviceType = DIRECT_ACCESS_DEVICE;
+    BlockLimits->DeviceTypeQualifier = DEVICE_QUALIFIER_ACTIVE;
+    BlockLimits->PageCode = VPD_BLOCK_LIMITS;
+    BlockLimits->PageLength[1] = sizeof(VPD_BLOCK_LIMITS_PAGE) -
+        RTL_SIZEOF_THROUGH_FIELD(VPD_BLOCK_LIMITS_PAGE, PageLength);
+
+    *(UINT32*)BlockLimits->MaximumTransferLength =
+        MaximumTransferLength / Info->UserEntry->BlockSize;
+    if (CHECK_NBD_SEND_TRIM(Info->UserEntry->NbdFlags))
+    {
+        *(UINT32*)BlockLimits->MaximumUnmapLBACount = 0xffffffff;
+        *(UINT32*)BlockLimits->MaximumUnmapBlockDescriptorCount[0] =
+            MaximumTransferLength / sizeof(UNMAP_BLOCK_DESCRIPTOR);
+    }
+
+    SrbSetDataTransferLength(Srb, sizeof(VPD_BLOCK_LIMITS_PAGE));
+
+    WNBD_LOG_LOUD(": Exit");
+}
+
+VOID
+WnbdSetVpdLogicalBlockProvisioning(
+    _In_ PVOID Data,
+    _In_ PSCSI_DEVICE_INFORMATION Info,
+    _In_ PSCSI_REQUEST_BLOCK Srb)
+{
+    WNBD_LOG_LOUD(": Enter");
+
+    LogicalBlockProvisioning = Data;
+    LogicalBlockProvisioning->DeviceType = DIRECT_ACCESS_DEVICE;
+    LogicalBlockProvisioning->DeviceTypeQualifier = DEVICE_QUALIFIER_ACTIVE;
+    LogicalBlockProvisioning->PageCode = VPD_LOGICAL_BLOCK_PROVISIONING;
+    LogicalBlockProvisioning->PageLength[1] = sizeof(VPD_LOGICAL_BLOCK_PROVISIONING_PAGE) -
+        RTL_SIZEOF_THROUGH_FIELD(VPD_LOGICAL_BLOCK_PROVISIONING_PAGE, PageLength);
+    if (CHECK_NBD_SEND_TRIM(Info->UserEntry->NbdFlags))
+    {
+        LogicalBlockProvisioning->LBPU = 1;
+        // TODO: trim support doesn't imply thin provisioning, but there
+        // might be some assumptions. Check if we actually have to set this.
+        LogicalBlockProvisioning->ProvisioningType = PROVISIONING_TYPE_THIN;
+    }
+
+    SrbSetDataTransferLength(Srb, sizeof(VPD_LOGICAL_BLOCK_PROVISIONING_PAGE));
+
+    WNBD_LOG_LOUD(": Exit");
+}
+
+UCHAR
 WnbdProcessExtendedInquiry(_In_ PVOID Data,
                            _In_ ULONG Length,
                            _In_ PSCSI_REQUEST_BLOCK Srb,
@@ -148,7 +209,7 @@ WnbdProcessExtendedInquiry(_In_ PVOID Data,
     ASSERT(Cdb);
 
     UCHAR SrbStatus = SRB_STATUS_SUCCESS;
-    UCHAR NumberOfSupportedPages = 2;
+    UCHAR NumberOfSupportedPages = 4;
     UCHAR MaxSerialNumberSize = sizeof(VPD_SERIAL_NUMBER_PAGE) + sizeof(UCHAR[36]);
     UCHAR MaxVpdSuportedPage = sizeof(VPD_SUPPORTED_PAGES_PAGE) + NumberOfSupportedPages;
 
@@ -172,6 +233,16 @@ WnbdProcessExtendedInquiry(_In_ PVOID Data,
                                            Srb);
         }
         break;
+    case VPD_BLOCK_LIMITS:
+        if (sizeof(VPD_BLOCK_LIMITS_PAGE) > Length)
+            return SRB_STATUS_DATA_OVERRUN;
+
+        WnbdSetVpdBlockLimits(Data, Info, Srb);
+    case VPD_LOGICAL_BLOCK_PROVISIONING:
+        if (sizeof(VPD_LOGICAL_BLOCK_PROVISIONING_PAGE) > DataTransferLength)
+            return SRB_STATUS_DATA_OVERRUN;
+
+        WnbdSetVpdLogicalBlockProvisioning(Data, Info, Srb);
     default:
         WNBD_LOG_ERROR("Unknown VPD Page: %u", Cdb->CDB6INQUIRY3.PageCode);
         break;
@@ -230,6 +301,7 @@ WnbdSetModeSense(_In_ PVOID Data,
                  _In_ PCDB Cdb,
                  _In_ ULONG MaxLength,
                  _In_ BOOLEAN ReadOnly,
+                 _In_ BOOLEAN AcceptFUA,
                  _Out_ PVOID Page,
                  _Out_ PULONG Length)
 {
@@ -256,7 +328,9 @@ WnbdSetModeSense(_In_ PVOID Data,
         ModeParameterHeader->ModeDataLength = (UCHAR)(*Length -
             RTL_SIZEOF_THROUGH_FIELD(MODE_PARAMETER_HEADER, ModeDataLength));
         ModeParameterHeader->MediumType = 0;
-        ModeParameterHeader->DeviceSpecificParameter = ReadOnly ? MODE_DSP_WRITE_PROTECT : 0;
+        ModeParameterHeader->DeviceSpecificParameter =
+            (ReadOnly ? MODE_DSP_WRITE_PROTECT : 0) |
+            (AcceptFUA ? MODE_DSP_FUA_SUPPORTED : 0);
         ModeParameterHeader->BlockDescriptorLength = 0;
         }
         break;
@@ -276,7 +350,9 @@ WnbdSetModeSense(_In_ PVOID Data,
         ModeParameterHeader->ModeDataLength[1] = (UCHAR)(*Length -
             RTL_SIZEOF_THROUGH_FIELD(MODE_PARAMETER_HEADER10, ModeDataLength));
         ModeParameterHeader->MediumType = 0;
-        ModeParameterHeader->DeviceSpecificParameter = ReadOnly ? MODE_DSP_WRITE_PROTECT : 0;
+        ModeParameterHeader->DeviceSpecificParameter =
+            (ReadOnly ? MODE_DSP_WRITE_PROTECT : 0) |
+            (AcceptFUA ? MODE_DSP_FUA_SUPPORTED : 0);
         ModeParameterHeader->BlockDescriptorLength[0] = 0;
         ModeParameterHeader->BlockDescriptorLength[1] = 0;
         }
@@ -314,7 +390,8 @@ WnbdModeSense(_In_ PSCSI_DEVICE_INFORMATION Info,
 
     SrbStatus = WnbdSetModeSense(
         DataBuffer, Cdb, DataTransferLength,
-        Info->UserEntry->ReadOnly,
+        CHECK_NBD_READONLY(Info->UserEntry->NbdFlags),
+        CHECK_NBD_SEND_FUA(Info->UserEntry->NbdFlags),
         Page, &Length);
     if (SRB_STATUS_SUCCESS != SrbStatus || NULL == Page) {
         goto Exit;
@@ -324,8 +401,8 @@ WnbdModeSense(_In_ PSCSI_DEVICE_INFORMATION Info,
     Page->PageSavable = 0;
     Page->PageLength = sizeof(MODE_CACHING_PAGE) -
         RTL_SIZEOF_THROUGH_FIELD(MODE_CACHING_PAGE, PageLength);
-    Page->ReadDisableCache = 1;
-    Page->WriteCacheEnable = 0;
+    Page->ReadDisableCache = !CHECK_NBD_SEND_FLUSH(Info->UserEntry->NbdFlags);
+    Page->WriteCacheEnable = CHECK_NBD_SEND_FLUSH(Info->UserEntry->NbdFlags);
 
     SrbSetDataTransferLength(Srb, Length);
 
@@ -339,7 +416,9 @@ WnbdPendElement(_In_ PVOID DeviceExtension,
                 _In_ PVOID ScsiDeviceExtension,
                 _In_ PSCSI_REQUEST_BLOCK Srb,
                 _In_ UINT64 StartingLbn,
-                _In_ UINT64 DataLength)
+                _In_ UINT64 DataLength,
+                _In_ BOOLEAN FUA,
+                _In_ UINT64 RequestCount)
 {
     WNBD_LOG_LOUD(": Enter");
     NTSTATUS Status = STATUS_SUCCESS;
@@ -361,6 +440,9 @@ WnbdPendElement(_In_ PVOID DeviceExtension,
     Element->StartingLbn = StartingLbn;
     Element->ReadLength = (ULONG)DataLength;
     Element->Aborted = 0;
+    Element->FUA = FUA;
+    // Some SRBs contain multiple requests (e.g. UNMAP).
+    Element->RequestCount = RequestCount;
     ExInterlockedInsertTailList(&ScsiInfo->RequestListHead, &Element->Link, &ScsiInfo->RequestListLock);
     WnbdReleaseSemaphore(&ScsiInfo->DeviceEvent, 0, 1, FALSE);
     Status = STATUS_PENDING;
@@ -399,8 +481,8 @@ WnbdPendOperation(_In_ PVOID DeviceExtension,
         UINT64 BlockAddress = 0;
         UINT32 BlockCount = 0;
         ULONG DataLength = 0;
-        UINT32 Access = 0;
-        SrbCdbGetRange(Cdb, &BlockAddress, &BlockCount, &Access);
+        UINT32 FUA = 0;
+        SrbCdbGetRange(Cdb, &BlockAddress, &BlockCount, &FUA);
         DataLength = BlockCount * ScsiInfo->UserEntry->BlockSize;
         if (DataLength < Srb->DataTransferLength &&
             (Cdb->AsByte[0] != SCSIOP_SYNCHRONIZE_CACHE || Cdb->AsByte[0] != SCSIOP_SYNCHRONIZE_CACHE16)) {
@@ -410,7 +492,71 @@ WnbdPendOperation(_In_ PVOID DeviceExtension,
             break;
         }
         Status = WnbdPendElement(DeviceExtension, ScsiDeviceExtension, Srb,
-            BlockAddress * ScsiInfo->UserEntry->BlockSize, DataLength);
+            BlockAddress * ScsiInfo->UserEntry->BlockSize, DataLength, FUA, 1);
+        }
+        break;
+    case SCSIOP_UNMAP:
+        PUNMAP_LIST_HEADER DataBuffer = SrbGetDataBuffer(Srb);
+        ULONG DataTransferLength = SrbGetDataTransferLength(Srb);
+        ULONG DataLength;
+
+        if (!DataBuffer ||
+            DataTransferLength < sizeof(UNMAP_LIST_HEADER) ||
+            DataTransferLength < sizeof(UNMAP_LIST_HEADER) + (
+                DataLength = ((ULONG)DataBuffer->BlockDescrDataLength[0] << 8) |
+                    (ULONG)DataBuffer->BlockDescrDataLength[1]) ||
+            DataLength > WNBD_MAX_TRANSFER_LENGTH)
+        {
+            Srb->SrbStatus = SRB_STATUS_ABORTED;
+            Status = STATUS_BUFFER_TOO_SMALL;
+            break;
+        }
+
+        // We don't support the anchored state at the moment.
+        if (Cdb->UNMAP.Anchor)
+        {
+            Srb->SrbStatus = SRB_STATUS_INVALID_REQUEST;
+            Status = STATUS_INVALID_PARAMETER;
+            break;
+        }
+
+        // Empty request, let's mark it as a completed right away.
+        if (0 == DataLength) {
+            Srb->DataTransferLength = 0;
+            Srb->SrbStatus = SRB_STATUS_INVALID_REQUEST;
+            Status = STATUS_INVALID_PARAMETER;
+            StorPortNotification(RequestComplete,
+                                 Element->DeviceExtension,
+                                 Element->Srb);
+            break;
+        }
+
+        DescriptorCount = DataLength / sizeof(UNMAP_BLOCK_DESCRIPTOR);
+        for (ULONG i=0, i<DescriptorCount; i++)
+        {
+            PUNMAP_BLOCK_DESCRIPTOR Src = &DataBuffer->Descriptors[i];
+            UINT64 BlockAddress = *(UINT64*)Src->StartingLba;
+            UINT32 BlockCount = *(UINT32*)Src->LbaCount;
+            UINT64 LastBlockAddress = BlockAddress + BlockCount;
+
+            if (LastBlockAddress < BlockAddress ||
+                LastBlockAddress * ScsiInfo->UserEntry->BlockSize >=
+                    ScsiInfo->UserEntry->DiskSize)
+            {
+                Srb->SrbStatus = SRB_STATUS_INVALID_REQUEST;
+                Status = STATUS_INVALID_PARAMETER;
+            }
+
+            // TODO: can FUA be requested for UNMAP requests? NBD specs suggest
+            // that it can, storport.h and SCSI specs suggest otherwise.
+            Status = WnbdPendElement(DeviceExtension, ScsiDeviceExtension, Srb,
+                BlockAddress * ScsiInfo->UserEntry->BlockSize,
+                BlockCount * ScsiInfo->UserEntry->BlockSize,
+                FALSE, DescriptorCount);
+            // TODO: fail the SRB and cleanup queue if one of the descriptors
+            // fails.
+            if(Status)
+                break;
         }
         break;
     default:
