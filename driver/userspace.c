@@ -473,8 +473,8 @@ WnbdDrainQueueOnClose(_In_ PSCSI_DEVICE_INFORMATION DeviceInformation)
             RemoveEntryList(&Element->Link);
             Element->Srb->DataTransferLength = 0;
             Element->Srb->SrbStatus = SRB_STATUS_INTERNAL_ERROR;
-            StorPortNotification(RequestComplete, Element->DeviceExtension,
-                Element->Srb);
+            // StorPortNotification(RequestComplete, Element->DeviceExtension,
+            //     Element->Srb);
             ExFreePool(Element);
         }
         Element = NULL;
@@ -492,8 +492,8 @@ Reply:
             if (!Element->Aborted) {
                 Element->Srb->DataTransferLength = 0;
                 Element->Srb->SrbStatus = SRB_STATUS_INTERNAL_ERROR;
-                StorPortNotification(RequestComplete, Element->DeviceExtension,
-                    Element->Srb);
+                // StorPortNotification(RequestComplete, Element->DeviceExtension,
+                //     Element->Srb);
             }
             ExFreePool(Element);
             InterlockedDecrement64(&DeviceInformation->Stats.PendingSubmittedIORequests);

@@ -53,8 +53,8 @@ VOID DrainDeviceQueue(PWNBD_SCSI_DEVICE Device, PLIST_ENTRY ListHead,
         WNBD_LOG_INFO("Notifying StorPort of completion of %p 0x%llx status: 0x%x(%s)",
             Element->Srb, Element->Tag, Element->Srb->SrbStatus,
             WnbdToStringSrbStatus(Element->Srb->SrbStatus));
-        StorPortNotification(RequestComplete, Element->DeviceExtension,
-                             Element->Srb);
+        // StorPortNotification(RequestComplete, Element->DeviceExtension,
+        //                      Element->Srb);
         ExFreePool(Element);
 
         InterlockedIncrement64(&DeviceInformation->Stats.AbortedUnsubmittedIORequests);
@@ -86,8 +86,8 @@ VOID SendAbortFailedForQueue(PLIST_ENTRY ListHead, PKSPIN_LOCK ListLock,
             WNBD_LOG_INFO("Notifying StorPort of completion of %p 0x%llx status: 0x%x(%s)",
             Element->Srb, Element->Tag, Element->Srb->SrbStatus,
             WnbdToStringSrbStatus(Element->Srb->SrbStatus));
-            StorPortNotification(RequestComplete, Element->DeviceExtension,
-                                 Element->Srb);
+            // StorPortNotification(RequestComplete, Element->DeviceExtension,
+            //                      Element->Srb);
             Element->Aborted = 1;
 
             InterlockedIncrement64(&DeviceInformation->Stats.AbortedUnsubmittedIORequests);

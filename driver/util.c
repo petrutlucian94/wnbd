@@ -44,7 +44,7 @@ WnbdDeleteScsiInformation(_In_ PVOID ScsiInformation)
         InterlockedDecrement(&Device->OutstandingIoCount);
         WNBD_LOG_INFO("Notifying StorPort of completion of %p status: 0x%x(%s)",
             Element->Srb, Element->Srb->SrbStatus, WnbdToStringSrbStatus(Element->Srb->SrbStatus));
-        StorPortNotification(RequestComplete, Element->DeviceExtension, Element->Srb);
+        // StorPortNotification(RequestComplete, Element->DeviceExtension, Element->Srb);
         ExFreePool(Element);
     }
 
@@ -327,9 +327,9 @@ WnbdProcessDeviceThreadRequests(_In_ PSCSI_DEVICE_INFORMATION DeviceInformation)
                     Element->Srb->SrbStatus = SRB_STATUS_INVALID_REQUEST;
                     WNBD_LOG_LOUD("Write or flush requested on a read-only disk.",
                                   Status, Element->Srb, Element->Tag);
-                    StorPortNotification(RequestComplete,
-                                         Element->DeviceExtension,
-                                         Element->Srb);
+                    // StorPortNotification(RequestComplete,
+                    //                      Element->DeviceExtension,
+                    //                      Element->Srb);
                     ExFreePool(Element);
                     continue;
             }
@@ -375,13 +375,17 @@ WnbdProcessDeviceThreadRequests(_In_ PSCSI_DEVICE_INFORMATION DeviceInformation)
              */
             Element->Srb->DataTransferLength = 0;
             Element->Srb->SrbStatus = SRB_STATUS_SUCCESS;
-            StorPortNotification(RequestComplete, Element->DeviceExtension, Element->Srb);
+            // StorPortNotification(RequestComplete, Element->DeviceExtension, Element->Srb);
             ExFreePool(Element);
             return;
         default:
             Status = STATUS_DRIVER_INTERNAL_ERROR;
             break;
         }
+
+        Element->Srb->SrbStatus = SRB_STATUS_SUCCESS;
+        StorPortNotification(RequestComplete, Element->DeviceExtension, Element->Srb);
+        WnbdReleaseSemaphore(&DeviceInformation->RequestSemaphore, 0, 1, FALSE);
 
         if (Status) {
             WNBD_LOG_INFO("FD failed with: %x. Address: %p Tag: 0x%llx",
@@ -503,8 +507,8 @@ WnbdProcessDeviceThreadReplies(_In_ PSCSI_DEVICE_INFORMATION DeviceInformation)
             /* Remove the element from the list once found*/
             RemoveEntryList(&Element->Link);
             break;
-        }
-        Element = NULL;
+        
+}        Element = NULL;
     }
     KeReleaseSpinLock(&DeviceInformation->ReplyListLock, Irql);
     if(!Element) {
@@ -516,6 +520,7 @@ WnbdProcessDeviceThreadReplies(_In_ PSCSI_DEVICE_INFORMATION DeviceInformation)
     WNBD_LOG_LOUD("Received reply header for %p 0x%llx.", Element->Srb, Element->Tag);
 
     ULONG StorResult;
+    Element->Aborted = 1;
     if(!Element->Aborted) {
         StorResult = StorPortGetSystemAddress(Element->DeviceExtension, Element->Srb, &SrbBuff);
         if (STOR_STATUS_SUCCESS != StorResult) {
@@ -589,8 +594,8 @@ Exit:
             WNBD_LOG_INFO("Notifying StorPort of completion of %p status: 0x%x(%s)",
                 Element->Srb, Element->Srb->SrbStatus,
                 WnbdToStringSrbStatus(Element->Srb->SrbStatus));
-            StorPortNotification(RequestComplete, Element->DeviceExtension,
-                                 Element->Srb);
+            // StorPortNotification(RequestComplete, Element->DeviceExtension,
+            //                      Element->Srb);
         }
         ExFreePool(Element);
     }
