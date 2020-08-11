@@ -41,4 +41,5 @@ tags
 /vstudiox64/
 /lib/ksocket_wsk/x64/
 /userspace/userspace/x64/
-
+/wvbd.dll/wvbd.dll.vcxproj.user
+wvbd.dll/x64/
