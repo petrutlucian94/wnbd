@@ -54,6 +54,9 @@
     <ClCompile Include="..\driver\scsi_trace.c">
       <Filter>Driver Files</Filter>
     </ClCompile>
+    <ClCompile Include="..\driver\wvbd_dispatch.c">
+      <Filter>Driver Files</Filter>
+    </ClCompile>
   </ItemGroup>
   <ItemGroup>
     <ClInclude Include="..\driver\userspace.h">
@@ -92,7 +95,13 @@
     <ClInclude Include="..\driver\srb_helper.h">
       <Filter>Header Files</Filter>
     </ClInclude>
-    <ClInclude Include="..\driver\userspace_shared.h">
+    <ClInclude Include="..\driver\wvbd_dispatch.h">
+      <Filter>Header Files</Filter>
+    </ClInclude>
+    <ClInclude Include="..\include\userspace_shared.h">
+      <Filter>Header Files</Filter>
+    </ClInclude>
+    <ClInclude Include="..\include\wvbd_ioctl.h">
       <Filter>Header Files</Filter>
     </ClInclude>
   </ItemGroup>

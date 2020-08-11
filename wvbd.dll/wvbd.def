@@ -1,0 +1,18 @@
+EXPORTS
+    WvbdCreate
+    WvbdRemove
+    WvbdClose
+
+    WvbdSetSenseEx
+    WvbdSetSense
+
+    WvbdStartDispatcher
+    WvbdWaitDispatcher
+    WvbdSendResponse
+
+    WvbdOpenDevice
+    WvbdIoctlCreate
+    WvbdIoctlRemove
+    WvbdIoctlRemoveEx
+    WvbdIoctlFetchRequest
+    WvbdIoctlSendResponse

@@ -30,6 +30,8 @@ static const GUID WNBD_GUID = {
       {0x8e, 0x13, 0xf1, 0xa3, 0xa4, 0xa6, 0xdb, 0xcb}
 };
 
+// TODO: make this NBD agnostic
+// TODO: accept MaxTransferLength, UnmapAnchorSupported and MaxUnmapDescCount
 typedef struct _CONNECTION_INFO {
     ULONG		    IoControlCode;
     CHAR            InstanceName[MAX_NAME_LENGTH];
@@ -42,6 +44,7 @@ typedef struct _CONNECTION_INFO {
     UINT64          DiskSize;
     UINT16          BlockSize;
     UINT16          NbdFlags;
+    BOOLEAN         UseWvbdAPI;
 } CONNECTION_INFO, * PCONNECTION_INFO;
 
 typedef struct _WNBD_COMMAND {
