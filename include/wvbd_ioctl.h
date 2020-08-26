@@ -47,6 +47,7 @@ typedef struct
     UINT32 UnmapAnchorSupported:1;
     UINT32 MaxUnmapDescCount;
     UINT32 MaxTransferLength;
+    UINT32 MaxOutstandingIO;
 } WVBD_PROPERTIES, *PWVBD_PROPERTIES;
 
 typedef struct

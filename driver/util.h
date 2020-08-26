@@ -26,7 +26,16 @@ WnbdDeleteScsiInformation(_In_ PVOID ScsiInformation);
 PWNBD_SCSI_DEVICE
 WnbdFindDevice(_In_ PWNBD_LU_EXTENSION LuExtension,
                _In_ PWNBD_EXTENSION DeviceExtension,
-               _In_ PSCSI_REQUEST_BLOCK Srb);
+               _In_ UCHAR PathId,
+               _In_ UCHAR TargetId,
+               _In_ UCHAR Lun);
+
+PWNBD_SCSI_DEVICE
+WnbdFindDeviceEx(
+    _In_ PWNBD_EXTENSION DeviceExtension,
+    _In_ UCHAR PathId,
+    _In_ UCHAR TargetId,
+    _In_ UCHAR Lun);
 
 typedef struct _SRB_QUEUE_ELEMENT {
     LIST_ENTRY Link;
@@ -63,3 +72,5 @@ BOOLEAN ValidateScsiRequest(
          _itemPtr = _nextPtr, _nextPtr = (_itemPtr)->Flink)
 
 #endif
+
+UCHAR SetSrbStatus(PVOID Srb, PWVBD_STATUS Status);

@@ -205,8 +205,8 @@ DWORD WvbdSendResponse(
 {
     LogDebug(
         Device,
-        "Sending response: [%s] : (SS:%u, SK:%u, ASC:%u, I:%llu) # %llu."
-        "@ %p~0x%x",
+        "Sending response: [%s] : (SS:%u, SK:%u, ASC:%u, I:%llu) # %llx "
+        "@ %p~0x%x.",
         WvbdRequestTypeToStr(Response->RequestType),
         Response->Status.ScsiStatus,
         Response->Status.SenseKey,

@@ -4,6 +4,8 @@
  * Licensed under LGPL-2.1 (see LICENSE)
  */
 
+#include <ntifs.h>
+
 #include <berkeley.h>
 #include <ksocket.h>
 #include "common.h"
@@ -12,6 +14,8 @@
 #include "rbd_protocol.h"
 #include "scsi_function.h"
 #include "userspace.h"
+#include "wvbd_dispatch.h"
+#include "wvbd_ioctl.h"
 #include "util.h"
 
 #define CHECK_I_LOCATION(Io, Size) (Io->Parameters.DeviceIoControl.InputBufferLength < sizeof(Size))
@@ -32,12 +36,12 @@ VOID WnbdInitScsiIds()
 _Use_decl_annotations_
 BOOLEAN
 WnbdFindConnection(PGLOBAL_INFORMATION GInfo,
-                   PCONNECTION_INFO Info,
+                   PCHAR InstanceName,
                    PUSER_ENTRY* Entry)
 {
     WNBD_LOG_LOUD(": Enter");
     ASSERT(GInfo);
-    ASSERT(Info);
+    ASSERT(InstanceName);
 
     BOOLEAN Found = FALSE;
     PUSER_ENTRY SearchEntry;
@@ -45,7 +49,7 @@ WnbdFindConnection(PGLOBAL_INFORMATION GInfo,
     SearchEntry = (PUSER_ENTRY)GInfo->ConnectionList.Flink;
 
     while (SearchEntry != (PUSER_ENTRY)&GInfo->ConnectionList.Flink) {
-        if (!strcmp((CONST CHAR*)&SearchEntry->UserInformation.InstanceName, (CONST CHAR*)&Info->InstanceName)) {
+        if (!strcmp((CONST CHAR*)&SearchEntry->UserInformation.InstanceName, InstanceName)) {
             if (Entry) {
                 *Entry = SearchEntry;
 
@@ -151,12 +155,11 @@ WnbdInitializeScsiInfo(_In_ PSCSI_DEVICE_INFORMATION ScsiInfo)
 
     InitializeListHead(&ScsiInfo->RequestListHead);
     KeInitializeSpinLock(&ScsiInfo->RequestListLock);
-    KeInitializeSemaphore(&ScsiInfo->RequestSemaphore,
-                          WNBD_MAX_IN_FLIGHT_REQUESTS,
-                          WNBD_MAX_IN_FLIGHT_REQUESTS);
     InitializeListHead(&ScsiInfo->ReplyListHead);
     KeInitializeSpinLock(&ScsiInfo->ReplyListLock);
     KeInitializeSemaphore(&ScsiInfo->DeviceEvent, 0, 1 << 30);
+    KeInitializeEvent(&ScsiInfo->TerminateEvent, NotificationEvent, FALSE);
+
     Status = ExInitializeResourceLite(&ScsiInfo->SocketLock);
     if (!NT_SUCCESS(Status)) {
         Status = STATUS_INSUFFICIENT_RESOURCES;
@@ -225,7 +228,38 @@ SoftTerminate:
     if (reply_thread_handle)
         ZwClose(reply_thread_handle);
     ScsiInfo->SoftTerminateDevice = TRUE;
-    WnbdReleaseSemaphore(&ScsiInfo->DeviceEvent, 0, 1, FALSE);
+    KeReleaseSemaphore(&ScsiInfo->DeviceEvent, 0, 1, FALSE);
+
+Exit:
+    WNBD_LOG_LOUD(": Exit");
+    return Status;
+}
+
+NTSTATUS
+WnbdInitializeScsiInfoWvbd(_In_ PSCSI_DEVICE_INFORMATION ScsiInfo)
+{
+    WNBD_LOG_LOUD(": Enter");
+    ASSERT(ScsiInfo);
+    NTSTATUS Status = STATUS_SUCCESS;
+
+    InitializeListHead(&ScsiInfo->RequestListHead);
+    KeInitializeSpinLock(&ScsiInfo->RequestListLock);
+    InitializeListHead(&ScsiInfo->ReplyListHead);
+    KeInitializeSpinLock(&ScsiInfo->ReplyListLock);
+    KeInitializeSemaphore(&ScsiInfo->DeviceEvent, 0, 1 << 30);
+    KeInitializeEvent(&ScsiInfo->TerminateEvent, NotificationEvent, FALSE);
+
+    // TODO: check if this is still needed.
+    Status = ExInitializeResourceLite(&ScsiInfo->SocketLock);
+    if (!NT_SUCCESS(Status)) {
+        Status = STATUS_INSUFFICIENT_RESOURCES;
+        goto Exit;
+    }
+
+    ScsiInfo->HardTerminateDevice = FALSE;
+    ScsiInfo->SoftTerminateDevice = FALSE;
+
+    RtlZeroMemory(&ScsiInfo->Stats, sizeof(WNBD_STATS));
 
 Exit:
     WNBD_LOG_LOUD(": Exit");
@@ -245,7 +279,8 @@ WnbdSetNullUserInput(PCONNECTION_INFO Info)
 _Use_decl_annotations_
 NTSTATUS
 WnbdCreateConnection(PGLOBAL_INFORMATION GInfo,
-                     PCONNECTION_INFO Info)
+                     PCONNECTION_INFO Info,
+                     PWVBD_DISK_HANDLE DiskHandle)
 {
     WNBD_LOG_LOUD(": Enter");
     ASSERT(GInfo);
@@ -270,7 +305,7 @@ WnbdCreateConnection(PGLOBAL_INFORMATION GInfo,
 
     WnbdSetNullUserInput(Info);
 
-    if(WnbdFindConnection(GInfo, Info, NULL)) {
+    if(WnbdFindConnection(GInfo, Info->InstanceName, NULL)) {
         Status = STATUS_OBJECT_NAME_COLLISION;
         goto Exit;
     }
@@ -299,10 +334,12 @@ WnbdCreateConnection(PGLOBAL_INFORMATION GInfo,
         NewEntry->BlockSize = Info->BlockSize;
     }
 
-    Sock = NbdOpenAndConnect(Info->Hostname, Info->PortName);
-    if (-1 == Sock) {
-        Status = STATUS_CONNECTION_REFUSED;
-        goto ExitInquiryData;
+    if (!Info->UseWvbdAPI) {
+        Sock = NbdOpenAndConnect(Info->Hostname, Info->PortName);
+        if (-1 == Sock) {
+            Status = STATUS_CONNECTION_REFUSED;
+            goto ExitInquiryData;
+        }
     }
 
     ULONG bitNumber = RtlFindClearBitsAndSet(&ScsiBitMapHeader, 1, 0);
@@ -313,7 +350,7 @@ WnbdCreateConnection(PGLOBAL_INFORMATION GInfo,
     }
 
     UINT16 RbdFlags = 0;
-    if (Info->MustNegotiate) {
+    if (!Info->UseWvbdAPI && Info->MustNegotiate) {
         WNBD_LOG_INFO("Trying to negotiate handshake with RBD Server");
         Info->DiskSize = 0;
         Status = RbdNegotiate(&Sock, &Info->DiskSize, &RbdFlags, Info->ExportName, 1, 1);
@@ -359,15 +396,21 @@ WnbdCreateConnection(PGLOBAL_INFORMATION GInfo,
     ScsiInfo->InquiryData = InquiryData;
     ScsiInfo->Socket = Sock;
 
-    Status = WnbdInitializeScsiInfo(ScsiInfo);
+    if (Info->UseWvbdAPI)
+        Status = WnbdInitializeScsiInfoWvbd(ScsiInfo);
+    else
+        Status = WnbdInitializeScsiInfo(ScsiInfo);
+
     if (!NT_SUCCESS(Status)) {
         goto ExitScsiInfo;
     }
 
+    // TODO: why do we store the same info twice?
     ScsiInfo->UserEntry = NewEntry;
     ScsiInfo->TargetIndex = TargetId;
     ScsiInfo->BusIndex = BusId;
     ScsiInfo->LunIndex = LunId;
+    *DiskHandle = WVBD_DISK_HANDLE_FROM_ADDR(TargetId, BusId, LunId);
 
     NewEntry->ScsiInformation = ScsiInfo;
     NewEntry->BusIndex = BusId;
@@ -511,15 +554,15 @@ Exit:
 _Use_decl_annotations_
 NTSTATUS
 WnbdDeleteConnection(PGLOBAL_INFORMATION GInfo,
-                     PCONNECTION_INFO Info)
+                     PCHAR InstanceName)
 {
     WNBD_LOG_LOUD(": Enter");
     ASSERT(GInfo);
-    ASSERT(Info);
+    ASSERT(InstanceName);
     PUSER_ENTRY EntryMarked = NULL;
     ULONG TargetIndex = 0;
     ULONG BusIndex = 0;
-    if(!WnbdFindConnection(GInfo, Info, &EntryMarked)) {
+    if(!WnbdFindConnection(GInfo, InstanceName, &EntryMarked)) {
         WNBD_LOG_ERROR("Could not find connection to delete");
         return STATUS_OBJECT_NAME_NOT_FOUND;
     }
@@ -533,15 +576,21 @@ WnbdDeleteConnection(PGLOBAL_INFORMATION GInfo,
         TargetIndex = ScsiInfo->TargetIndex;
         BusIndex = ScsiInfo->BusIndex;
         ScsiInfo->SoftTerminateDevice = TRUE;
-        WnbdReleaseSemaphore(&ScsiInfo->DeviceEvent, 0, 1, FALSE);
+        // TODO: implement proper soft termination.
+        ScsiInfo->HardTerminateDevice = TRUE;
+        KeSetEvent(&ScsiInfo->TerminateEvent, IO_NO_INCREMENT, FALSE);
+        KeReleaseSemaphore(&ScsiInfo->DeviceEvent, 0, 1, FALSE);
         LARGE_INTEGER Timeout;
         // TODO: consider making this configurable, currently 120s.
         Timeout.QuadPart = (-120 * 1000 * 10000);
         CloseConnection(ScsiInfo);
-        KeWaitForSingleObject(ScsiInfo->DeviceRequestThread, Executive, KernelMode, FALSE, NULL);
-        KeWaitForSingleObject(ScsiInfo->DeviceReplyThread, Executive, KernelMode, FALSE, &Timeout);
-        ObDereferenceObject(ScsiInfo->DeviceRequestThread);
-        ObDereferenceObject(ScsiInfo->DeviceReplyThread);
+
+        if (!ScsiInfo->UserEntry->UserInformation.UseWvbdAPI) {
+            KeWaitForSingleObject(ScsiInfo->DeviceRequestThread, Executive, KernelMode, FALSE, NULL);
+            KeWaitForSingleObject(ScsiInfo->DeviceReplyThread, Executive, KernelMode, FALSE, &Timeout);
+            ObDereferenceObject(ScsiInfo->DeviceRequestThread);
+            ObDereferenceObject(ScsiInfo->DeviceReplyThread);
+        }
         WnbdDrainQueueOnClose(ScsiInfo);
         DisconnectConnection(ScsiInfo);
 
@@ -614,7 +663,7 @@ WnbdEnumerateActiveConnections(PGLOBAL_INFORMATION GInfo,
     }
 
     Irp->IoStatus.Information = (OutList->ActiveListCount * sizeof(DISK_INFO)) + sizeof(ULONG);
-    WNBD_LOG_LOUD(": Exit");
+    WNBD_LOG_LOUD(": Exit: %d", status);
 
     return status;
 }
@@ -630,6 +679,9 @@ WnbdParseUserIOCTL(PVOID GlobalHandle,
     PIO_STACK_LOCATION IoLocation = IoGetCurrentIrpStackLocation(Irp);
     NTSTATUS Status = STATUS_SUCCESS;
     PGLOBAL_INFORMATION	GInfo = (PGLOBAL_INFORMATION) GlobalHandle;
+
+    PWNBD_SCSI_DEVICE Device = NULL;
+    PWNBD_EXTENSION Ext = NULL;
 
     WNBD_LOG_LOUD(": DeviceIoControl = 0x%x.",
                   IoLocation->Parameters.DeviceIoControl.IoControlCode);
@@ -672,7 +724,7 @@ WnbdParseUserIOCTL(PVOID GlobalHandle,
             KeEnterCriticalRegion();
             ExAcquireResourceExclusiveLite(&GInfo->ConnectionMutex, TRUE);
 
-            if(WnbdFindConnection(GInfo, Info, NULL)) {
+            if(WnbdFindConnection(GInfo, Info->InstanceName, NULL)) {
                 ExReleaseResourceLite(&GInfo->ConnectionMutex);
                 KeLeaveCriticalRegion();
                 Status = STATUS_FILES_OPEN;
@@ -681,7 +733,8 @@ WnbdParseUserIOCTL(PVOID GlobalHandle,
                 break;
             }
             WNBD_LOG_LOUD("IOCTL_WNBDVM_MAP CreateConnection");
-            Status = WnbdCreateConnection(GInfo,Info);
+            WVBD_DISK_HANDLE DiskHandle = 0;
+            Status = WnbdCreateConnection(GInfo, Info, &DiskHandle);
             ExReleaseResourceLite(&GInfo->ConnectionMutex);
             KeLeaveCriticalRegion();
             }
@@ -708,7 +761,7 @@ WnbdParseUserIOCTL(PVOID GlobalHandle,
 
             KeEnterCriticalRegion();
             ExAcquireResourceExclusiveLite(&GInfo->ConnectionMutex, TRUE);
-            if(!WnbdFindConnection(GInfo, Info, NULL)) {
+            if(!WnbdFindConnection(GInfo, Info->InstanceName, NULL)) {
                 ExReleaseResourceLite(&GInfo->ConnectionMutex);
                 KeLeaveCriticalRegion();
                 Status = STATUS_OBJECT_NAME_NOT_FOUND;
@@ -717,7 +770,7 @@ WnbdParseUserIOCTL(PVOID GlobalHandle,
                 break;
             }
             WNBD_LOG_LOUD("IOCTL_WNBDVM_UNMAP DeleteConnection");
-            Status = WnbdDeleteConnection(GInfo, Info);
+            Status = WnbdDeleteConnection(GInfo, Info->InstanceName);
             ExReleaseResourceLite(&GInfo->ConnectionMutex);
             KeLeaveCriticalRegion();
             }
@@ -789,7 +842,7 @@ WnbdParseUserIOCTL(PVOID GlobalHandle,
             }
 
             PUSER_ENTRY DiskEntry = NULL;
-            if(!WnbdFindConnection(GInfo, Info, &DiskEntry)) {
+            if(!WnbdFindConnection(GInfo, Info->InstanceName, &DiskEntry)) {
                 ExReleaseResourceLite(&GInfo->ConnectionMutex);
                 KeLeaveCriticalRegion();
                 Status = STATUS_OBJECT_NAME_NOT_FOUND;
@@ -808,6 +861,190 @@ WnbdParseUserIOCTL(PVOID GlobalHandle,
             Status = STATUS_SUCCESS;
         }
         break;
+
+        case IOCTL_WVBD_CREATE:
+            WNBD_LOG_LOUD("IOCTL_WVBD_CREATE");
+            PWVBD_IOCTL_CREATE_COMMAND Command = (PWVBD_IOCTL_CREATE_COMMAND) Irp->AssociatedIrp.SystemBuffer;
+            if(!Command ||
+                CHECK_I_LOCATION(IoLocation, WVBD_IOCTL_CREATE_COMMAND) ||
+                CHECK_O_LOCATION(IoLocation, WVBD_DISK_HANDLE))
+            {
+                WNBD_LOG_ERROR(": IOCTL = 0x%x. Bad input or output buffer",
+                    IoLocation->Parameters.DeviceIoControl.IoControlCode);
+                Status = STATUS_INVALID_PARAMETER;
+                break;
+            }
+            WVBD_PROPERTIES Info = Command->Properties;
+            Info.InstanceName[MAX_NAME_LENGTH - 1] = '\0';
+            if(!strlen((char*)&Info.InstanceName)) {
+                WNBD_LOG_ERROR(": IOCTL = 0x%x. Invalid InstanceName",
+                    IoLocation->Parameters.DeviceIoControl.IoControlCode);
+                Status = STATUS_INVALID_PARAMETER;
+                break;
+            }
+            KeEnterCriticalRegion();
+            ExAcquireResourceExclusiveLite(&GInfo->ConnectionMutex, TRUE);
+
+            // TODO: try to unify the API
+            CONNECTION_INFO ConnInfo = {0};
+            RtlCopyMemory(ConnInfo.InstanceName, Info.InstanceName, MAX_NAME_LENGTH);
+            RtlCopyMemory(ConnInfo.SerialNumber, Info.InstanceName, MAX_NAME_LENGTH);
+            ConnInfo.BlockSize = (UINT16)Info.BlockSize;
+            ConnInfo.DiskSize = Info.BlockSize * Info.BlockCount;
+            ConnInfo.Pid = IoGetRequestorProcessId(Irp);
+            ConnInfo.UseWvbdAPI = 1;
+            // TODO: populate NBD flags
+
+            WNBD_LOG_INFO("Mapping disk. Name: %s, BC=%llu, BS=%lu, Pid=%d",
+                          Info.InstanceName, Info.BlockCount, Info.BlockSize, ConnInfo.Pid);
+
+            if(WnbdFindConnection(GInfo, ConnInfo.InstanceName, NULL)) {
+                ExReleaseResourceLite(&GInfo->ConnectionMutex);
+                KeLeaveCriticalRegion();
+                Status = STATUS_FILES_OPEN;
+                WNBD_LOG_ERROR(": IOCTL = 0x%x. InstanceName already used.",
+                    IoLocation->Parameters.DeviceIoControl.IoControlCode);
+                break;
+            }
+
+            WVBD_DISK_HANDLE DiskHandle = 0;
+            Status = WnbdCreateConnection(GInfo, &ConnInfo, &DiskHandle);
+
+            PWVBD_DISK_HANDLE OutHandle = (PWVBD_DISK_HANDLE) Irp->AssociatedIrp.SystemBuffer;
+            RtlCopyMemory(OutHandle, &DiskHandle, sizeof(WVBD_DISK_HANDLE));
+            Irp->IoStatus.Information = sizeof(WVBD_DISK_HANDLE);
+
+            WNBD_LOG_LOUD("Mapped disk. Name: %s, Handle: %llu", Info.InstanceName, DiskHandle);
+
+            ExReleaseResourceLite(&GInfo->ConnectionMutex);
+            KeLeaveCriticalRegion();
+            break;
+
+        case IOCTL_WVBD_REMOVE:
+            {
+            WNBD_LOG_LOUD("IOCTL_WVBD_REMOVE");
+            PWVBD_IOCTL_REMOVE_COMMAND RmCmd = (PWVBD_IOCTL_REMOVE_COMMAND) Irp->AssociatedIrp.SystemBuffer;
+
+            if(!RmCmd || CHECK_I_LOCATION(IoLocation, WVBD_IOCTL_REMOVE_COMMAND)) {
+                WNBD_LOG_ERROR(": IOCTL = 0x%x. Bad input buffer",
+                    IoLocation->Parameters.DeviceIoControl.IoControlCode);
+                Status = STATUS_INVALID_PARAMETER;
+                break;
+            }
+
+            RmCmd->InstanceName[MAX_NAME_LENGTH - 1] = '\0';
+            if(!strlen((PCHAR)RmCmd->InstanceName)) {
+                WNBD_LOG_ERROR(": IOCTL = 0x%x. InstanceName Error",
+                    IoLocation->Parameters.DeviceIoControl.IoControlCode);
+                Status = STATUS_INVALID_PARAMETER;
+                break;
+            }
+
+            KeEnterCriticalRegion();
+            ExAcquireResourceExclusiveLite(&GInfo->ConnectionMutex, TRUE);
+
+            // TODO: avoid duplicating WNBD unmap code.
+            if(!WnbdFindConnection(GInfo, RmCmd->InstanceName, NULL)) {
+                ExReleaseResourceLite(&GInfo->ConnectionMutex);
+                KeLeaveCriticalRegion();
+                Status = STATUS_OBJECT_NAME_NOT_FOUND;
+                WNBD_LOG_ERROR(": IOCTL = 0x%x. Connection does not exist",
+                    IoLocation->Parameters.DeviceIoControl.IoControlCode);
+                break;
+            }
+            WNBD_LOG_LOUD("IOCTL_WNBDVM_UNMAP DeleteConnection");
+            Status = WnbdDeleteConnection(GInfo, RmCmd->InstanceName);
+            ExReleaseResourceLite(&GInfo->ConnectionMutex);
+            KeLeaveCriticalRegion();
+            }
+            break;
+
+        case IOCTL_WVBD_FETCH_REQ:
+            // TODO: move out individual Ioctl handling (e.g. adding
+            // WvbdIoctlFetchReq), this is becoming unreadable.
+            WNBD_LOG_LOUD("IOCTL_WVBD_FETCH_REQ");
+            PWVBD_IOCTL_FETCH_REQ_COMMAND ReqCmd =
+                (PWVBD_IOCTL_FETCH_REQ_COMMAND) Irp->AssociatedIrp.SystemBuffer;
+            // TODO: check if we can alter the input buffer without passing it twice.
+            if(!ReqCmd ||
+                CHECK_I_LOCATION(IoLocation, PWVBD_IOCTL_FETCH_REQ_COMMAND) ||
+                CHECK_O_LOCATION(IoLocation, PWVBD_IOCTL_FETCH_REQ_COMMAND))
+            {
+                WNBD_LOG_ERROR(": IOCTL = 0x%x. Bad input/output buffer",
+                    IoLocation->Parameters.DeviceIoControl.IoControlCode);
+                Status = STATUS_INVALID_PARAMETER;
+                break;
+            }
+
+            // TODO: do we actually need to enter a critical section and
+            // use the connection mutex?
+            KeEnterCriticalRegion();
+            ExAcquireResourceExclusiveLite(&GInfo->ConnectionMutex, TRUE);
+
+            Ext = (PWNBD_EXTENSION)GInfo->Handle;
+            Device = WnbdFindDeviceEx(
+                Ext,
+                WVBD_DISK_HANDLE_PATH(ReqCmd->DiskHandle),
+                WVBD_DISK_HANDLE_TARGET(ReqCmd->DiskHandle),
+                WVBD_DISK_HANDLE_LUN(ReqCmd->DiskHandle));
+
+            ExReleaseResourceLite(&GInfo->ConnectionMutex);
+            KeLeaveCriticalRegion();
+
+            if (!Device) {
+                Status = STATUS_INVALID_HANDLE;
+                WNBD_LOG_ERROR(
+                    ": IOCTL = 0x%x. Could not fetch request, invalid disk handle: %d.",
+                    IoLocation->Parameters.DeviceIoControl.IoControlCode,
+                    ReqCmd->DiskHandle);
+                break;
+            }
+
+            Status = WvbdDispatchRequest(Irp, Device, ReqCmd);
+            Irp->IoStatus.Information = sizeof(WVBD_IOCTL_FETCH_REQ_COMMAND);
+            WNBD_LOG_LOUD("Request dispatch status: %d. Request type: %d Request handle: %llx",
+                          Status, ReqCmd->Request.RequestType, ReqCmd->Request.RequestHandle);
+            break;
+
+        case IOCTL_WVBD_SEND_RSP:
+            WNBD_LOG_LOUD("IOCTL_WVBD_SEND_RSP");
+            PWVBD_IOCTL_SEND_RSP_COMMAND RspCmd =
+                (PWVBD_IOCTL_SEND_RSP_COMMAND) Irp->AssociatedIrp.SystemBuffer;
+            // TODO: check if we can alter the input buffer without passing it twice.
+            if(!RspCmd || CHECK_I_LOCATION(IoLocation, PWVBD_IOCTL_FETCH_REQ_COMMAND)) {
+                WNBD_LOG_ERROR(": IOCTL = 0x%x. Bad input/output buffer",
+                    IoLocation->Parameters.DeviceIoControl.IoControlCode);
+                Status = STATUS_INVALID_PARAMETER;
+                break;
+            }
+
+            // TODO: do we actually need to enter a critical section and
+            // use the connection mutex?
+            KeEnterCriticalRegion();
+            ExAcquireResourceExclusiveLite(&GInfo->ConnectionMutex, TRUE);
+
+            Ext = (PWNBD_EXTENSION)GInfo->Handle;
+            Device = WnbdFindDeviceEx(
+                Ext,
+                WVBD_DISK_HANDLE_PATH(RspCmd->DiskHandle),
+                WVBD_DISK_HANDLE_TARGET(RspCmd->DiskHandle),
+                WVBD_DISK_HANDLE_LUN(RspCmd->DiskHandle));
+
+            ExReleaseResourceLite(&GInfo->ConnectionMutex);
+            KeLeaveCriticalRegion();
+
+            if (!Device) {
+                Status = STATUS_INVALID_HANDLE;
+                WNBD_LOG_ERROR(
+                    ": IOCTL = 0x%x. Could not fetch request, invalid disk handle: %d.",
+                    IoLocation->Parameters.DeviceIoControl.IoControlCode,
+                    RspCmd->DiskHandle);
+                break;
+            }
+
+            Status = WvbdHandleResponse(Irp, Device, RspCmd);
+            WNBD_LOG_LOUD("Reply handling status: %d.", Status);
+            break;
 
         default:
             {
