@@ -7,6 +7,20 @@
 
 #include "wvbd.h"
 
+CHAR* DumpHexBuffer(PVOID Buffer, UINT64 BufferSize) {
+    if (!Buffer || !BufferSize)
+        return NULL;
+
+    char* HexBuffer = (char*) malloc (BufferSize * 3);
+    if (HexBuffer) {
+        for (int i = 0; i < BufferSize; i++) {
+            snprintf(HexBuffer + (i * 3), 4, "%02x ", ((PUCHAR) Buffer)[i]);
+        }
+        HexBuffer[BufferSize * 3 - 1] = '\0';
+    }
+    return HexBuffer;
+}
+
 VOID LogMessage(PWVBD_DEVICE Device, WvbdLogLevel LogLevel,
                 PCHAR FileName, UINT32 Line, PCHAR FunctionName,
                 PCHAR Format, ...) {
@@ -15,15 +29,22 @@ VOID LogMessage(PWVBD_DEVICE Device, WvbdLogLevel LogLevel,
         return;
 
     va_list Args;
-    CHAR Buff[WVBD_LOG_MESSAGE_MAX_SIZE];
-
+ 
     va_start(Args, Format);
-    vsnprintf_s(Buff, WVBD_LOG_MESSAGE_MAX_SIZE, WVBD_LOG_MESSAGE_MAX_SIZE - 1, Format, Args);
+
+    size_t BufferLength = _vscprintf(Format, Args);
+    char* Buff = (char*) malloc(BufferLength);
+    if (!Buff)
+        return;
+
+    vsnprintf_s(Buff, BufferLength, BufferLength - 1, Format, Args);
     va_end(Args);
 
     Device->Interface->LogMessage(
         Device, LogLevel, Buff,
         FileName, Line, FunctionName);
+
+    free(Buff);
 }
 
 #define LogCritical(Device, Format, ...) \
@@ -42,6 +63,9 @@ VOID LogMessage(PWVBD_DEVICE Device, WvbdLogLevel LogLevel,
     LogMessage(Device, WvbdLogLevelDebug, \
                __FILE__, __LINE__, __FUNCTION__, Format, __VA_ARGS__)
 #define LogTrace(Device, Format, ...) \
+    LogMessage(Device, WvbdLogLevelTrace, \
+               __FILE__, __LINE__, __FUNCTION__, Format, __VA_ARGS__)
+#define LogDump(Device, Format, ...) \
     LogMessage(Device, WvbdLogLevelTrace, \
                __FILE__, __LINE__, __FUNCTION__, Format, __VA_ARGS__)
 
@@ -69,6 +93,11 @@ DWORD WvbdCreate(
     Device->Properties = *Properties;
     Device->LogLevel = LogLevel;
     Device->Handle = WvbdOpenDevice();
+
+    if (Device->Handle == INVALID_HANDLE_VALUE || !Device->Handle) {
+        ErrorCode = ERROR_OPEN_FAILED;
+        goto Exit;
+    }
 
     LogDebug(Device,
              "Mapping device. Name=%s, BC=%llu, BS=%lu, RO=%u, "
@@ -203,19 +232,47 @@ DWORD WvbdSendResponse(
     PVOID DataBuffer,
     UINT32 DataBufferSize)
 {
-    LogDebug(
-        Device,
-        "Sending response: [%s] : (SS:%u, SK:%u, ASC:%u, I:%llu) # %llx "
-        "@ %p~0x%x.",
-        WvbdRequestTypeToStr(Response->RequestType),
-        Response->Status.ScsiStatus,
-        Response->Status.SenseKey,
-        Response->Status.ASC,
-        Response->Status.InformationValid ?
-            Response->Status.Information : 0,
-        Response->RequestHandle,
-        DataBuffer,
-        DataBufferSize);
+    if (Response->RequestType == WvbdReqTypeRead &&
+        Device->LogLevel >= WvbdLogLevelDumpBuffers)
+    {
+        char* HexBuffer = DumpHexBuffer(DataBuffer, DataBufferSize);
+        if (HexBuffer) {
+            LogDump(Device,
+                    "Sending response: [%s] : "
+                    "(SS:%u, SK:%u, ASC:%u, I:%llu) # %llx "
+                    "@ %p~0x%x. Payload: %s\n",
+                    WvbdRequestTypeToStr(Response->RequestType),
+                    Response->Status.ScsiStatus,
+                    Response->Status.SenseKey,
+                    Response->Status.ASC,
+                    Response->Status.InformationValid ?
+                        Response->Status.Information : 0,
+                    Response->RequestHandle,
+                    DataBuffer,
+                    DataBufferSize,
+                    HexBuffer);
+            free(HexBuffer);
+        }
+        else {
+            LogWarning(Device, "Failed to dump IO payload.");
+        }
+    }
+    else {
+        LogDebug(
+            Device,
+            "Sending response: [%s] : (SS:%u, SK:%u, ASC:%u, I:%llu) # %llx "
+            "@ %p~0x%x.",
+            WvbdRequestTypeToStr(Response->RequestType),
+            Response->Status.ScsiStatus,
+            Response->Status.SenseKey,
+            Response->Status.ASC,
+            Response->Status.InformationValid ?
+                Response->Status.Information : 0,
+            Response->RequestHandle,
+            DataBuffer,
+            DataBufferSize);
+    }
+    
 
     InterlockedIncrement64(&Device->Stats.TotalReceivedReplies);
     InterlockedDecrement64(&Device->Stats.PendingSubmittedRequests);
@@ -282,10 +339,36 @@ VOID WvbdHandleRequest(PWVBD_DEVICE Device, PWVBD_IO_REQUEST Request,
         case WvbdReqTypeWrite:
             if (!Device->Interface->Write)
                 goto Unsupported;
-            LogDebug(Device, "Dispatching WRITE @ 0x%llx~0x%x # %llx." ,
-                     Request->Cmd.Write.BlockAddress,
-                     Request->Cmd.Write.BlockCount,
-                     Request->RequestHandle);
+
+            if (Device->LogLevel >= WvbdLogLevelDumpBuffers)
+            {
+                char* HexBuffer = DumpHexBuffer(
+                    Buffer,
+                    Device->Properties.BlockSize *
+                        Request->Cmd.Write.BlockCount);
+                // We'll write directly to stderr, the logging facility
+                // isn't meant to use large buffers.
+                if (HexBuffer) {
+                    LogDump(Device,
+                            "Dispatching WRITE @ 0x%llx~0x%x # %llx. "
+                            "Payload: %s\n.",
+                            Request->Cmd.Write.BlockAddress,
+                            Request->Cmd.Write.BlockCount,
+                            Request->RequestHandle,
+                            HexBuffer);
+                    free(HexBuffer);
+                }
+                else {
+                    LogWarning(Device, "Failed to dump IO payload.");
+                }
+            }
+            else {
+                LogDebug(Device, "Dispatching WRITE @ 0x%llx~0x%x # %llx." ,
+                         Request->Cmd.Write.BlockAddress,
+                         Request->Cmd.Write.BlockCount,
+                         Request->RequestHandle);
+            }
+
             Device->Interface->Write(
                 Device,
                 Request->RequestHandle,

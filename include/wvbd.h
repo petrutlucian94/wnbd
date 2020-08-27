@@ -18,7 +18,8 @@ typedef enum
     WvbdLogLevelWarning = 2,
     WvbdLogLevelInfo = 3,
     WvbdLogLevelDebug = 4,
-    WvbdLogLevelTrace = 5
+    WvbdLogLevelTrace = 5,
+    WvbdLogLevelDumpBuffers = 6
 } WvbdLogLevel;
 
 typedef struct _WVBD_STATS {
@@ -147,7 +148,7 @@ DWORD WvbdIoctlSendResponse(
     PVOID DataBuffer,
     UINT32 DataBufferSize);
 
-static inline CHAR* WvbdLogLevelToStr(WvbdLogLevel LogLevel) {
+static inline const CHAR* WvbdLogLevelToStr(WvbdLogLevel LogLevel) {
     switch(LogLevel)
     {
         case WvbdLogLevelCritical:
