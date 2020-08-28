@@ -12,12 +12,22 @@
 #include "scsi_driver_extensions.h"
 #include "userspace_shared.h"
 #include "rbd_protocol.h"
+#include "wvbd_ioctl.h"
 
-// TODO: make this configurable.
-#define WNBD_MAX_IN_FLIGHT_REQUESTS 255
+// TODO: make this configurable. 1024 is the Storport default.
+#define WNBD_MAX_IN_FLIGHT_REQUESTS 1024
 // For transfers larger than 32MB, we'll receive 0 sized buffers.
 #define WNBD_MAX_TRANSFER_LENGTH 2 * 1024 * 1024
 #define WNBD_PREALLOC_BUFF_SZ (WNBD_MAX_TRANSFER_LENGTH + sizeof(NBD_REQUEST))
+
+// TODO: consider moving this along with the wvbd dispatch functions.
+// The disk handle provided to the user is meant to be opaque. We're currently
+// using the disk address, but that might change.
+#define WVBD_DISK_HANDLE_FROM_ADDR(PathId, TargetId, Lun) \
+    (((PathId) << 16) | ((TargetId) << 8) | (Lun))
+#define WVBD_DISK_HANDLE_PATH(Handle) (((Handle) >> 16) & 0xff)
+#define WVBD_DISK_HANDLE_TARGET(Handle) (((Handle) >> 8) & 0xff)
+#define WVBD_DISK_HANDLE_LUN(Handle) ((Handle) & 0xff)
 
 typedef struct _USER_ENTRY {
     LIST_ENTRY                         ListEntry;
@@ -55,13 +65,12 @@ typedef struct _SCSI_DEVICE_INFORMATION
     LIST_ENTRY                  ReplyListHead;
     KSPIN_LOCK                  ReplyListLock;
 
-    KSEMAPHORE                  RequestSemaphore;
-
     KSEMAPHORE                  DeviceEvent;
     PVOID                       DeviceRequestThread;
     PVOID                       DeviceReplyThread;
     BOOLEAN                     HardTerminateDevice;
     BOOLEAN                     SoftTerminateDevice;
+    KEVENT                      TerminateEvent;
 
     WNBD_STATS                  Stats;
     PVOID                       ReadPreallocatedBuffer;
@@ -76,12 +85,13 @@ WnbdParseUserIOCTL(_In_ PVOID GlobalHandle,
 
 BOOLEAN
 WnbdFindConnection(_In_ PGLOBAL_INFORMATION GInfo,
-                   _In_ PCONNECTION_INFO Info,
+                   _In_ PCHAR InstanceName,
                    _Maybenull_ PUSER_ENTRY* Entry);
 
 NTSTATUS
 WnbdCreateConnection(_In_ PGLOBAL_INFORMATION GInfo,
-                     _In_ PCONNECTION_INFO Info);
+                     _In_ PCONNECTION_INFO Info,
+                     _In_ PWVBD_DISK_HANDLE DiskHandle);
 
 NTSTATUS
 WnbdDeleteConnectionEntry(_In_ PUSER_ENTRY Entry);
@@ -92,7 +102,7 @@ WnbdEnumerateActiveConnections(_In_ PGLOBAL_INFORMATION GInfo,
 
 NTSTATUS
 WnbdDeleteConnection(_In_ PGLOBAL_INFORMATION GInfo,
-                     _In_ PCONNECTION_INFO Info);
+                     _In_ PCHAR InstanceName);
 
 VOID
 WnbdInitScsiIds();

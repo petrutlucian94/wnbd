@@ -494,7 +494,7 @@ WnbdPendElement(_In_ PVOID DeviceExtension,
     Element->Aborted = 0;
     Element->FUA = FUA;
     ExInterlockedInsertTailList(&ScsiInfo->RequestListHead, &Element->Link, &ScsiInfo->RequestListLock);
-    WnbdReleaseSemaphore(&ScsiInfo->DeviceEvent, 0, 1, FALSE);
+    KeReleaseSemaphore(&ScsiInfo->DeviceEvent, 0, 1, FALSE);
     Status = STATUS_PENDING;
 
 Exit:

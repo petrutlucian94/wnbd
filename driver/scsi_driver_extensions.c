@@ -117,6 +117,7 @@ WnbdHwFindAdapter(PVOID DeviceExtension,
     // MaximumTransferLength to SP_UNINITIALIZED_VALUE. Keeping transfer lengths
     // smaller than 32MB avoids this issue.
     ConfigInfo->MaximumTransferLength = WNBD_MAX_TRANSFER_LENGTH;
+    ConfigInfo->MaxNumberOfIO = WNBD_MAX_IN_FLIGHT_REQUESTS;
     ConfigInfo->NumberOfPhysicalBreaks = SP_UNINITIALIZED_VALUE;
     ConfigInfo->AlignmentMask = FILE_BYTE_ALIGNMENT;
     ConfigInfo->NumberOfBuses = MAX_NUMBER_OF_SCSI_BUSES;
