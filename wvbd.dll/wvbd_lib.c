@@ -64,6 +64,9 @@ DWORD WvbdCreate(
     if (STRING_OVERFLOWS(Properties->InstanceName, MAX_NAME_LENGTH)) {
         return ERROR_BUFFER_OVERFLOW;
     }
+    if (STRING_OVERFLOWS(Properties->SerialNumber, MAX_NAME_LENGTH)) {
+        return ERROR_BUFFER_OVERFLOW;
+    }
 
     Device = (PWVBD_DEVICE)calloc(1, sizeof(WVBD_DEVICE));
     if (!Device) {
@@ -77,10 +80,11 @@ DWORD WvbdCreate(
     Device->Handle = WvbdOpenDevice();
 
     LogDebug(Device,
-             "Mapping device. Name=%s, BC=%llu, BS=%lu, RO=%u, "
+             "Mapping device. Name=%s, Serial=%s, BC=%llu, BS=%lu, RO=%u, "
              "Cache=%u, Unmap=%u, UnmapAnchor=%u, MaxUnmapDescCount=%u, "
              "MaxTransferLength=%u.",
              Properties->InstanceName,
+             Properties->SerialNumber,
              Properties->BlockCount,
              Properties->BlockSize,
              Properties->ReadOnly,

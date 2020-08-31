@@ -39,6 +39,7 @@ typedef struct
 typedef struct
 {
     CHAR InstanceName[MAX_NAME_LENGTH];
+    CHAR SerialNumber[MAX_NAME_LENGTH];
     UINT64 BlockCount;
     UINT32 BlockSize;
     UINT32 ReadOnly:1;

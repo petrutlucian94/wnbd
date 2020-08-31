@@ -876,6 +876,8 @@ WnbdParseUserIOCTL(PVOID GlobalHandle,
             }
             WVBD_PROPERTIES Info = Command->Properties;
             Info.InstanceName[MAX_NAME_LENGTH - 1] = '\0';
+            Info.SerialNumber[MAX_NAME_LENGTH - 1] = '\0';
+
             if(!strlen((char*)&Info.InstanceName)) {
                 WNBD_LOG_ERROR(": IOCTL = 0x%x. Invalid InstanceName",
                     IoLocation->Parameters.DeviceIoControl.IoControlCode);
@@ -888,15 +890,19 @@ WnbdParseUserIOCTL(PVOID GlobalHandle,
             // TODO: try to unify the API
             CONNECTION_INFO ConnInfo = {0};
             RtlCopyMemory(ConnInfo.InstanceName, Info.InstanceName, MAX_NAME_LENGTH);
-            RtlCopyMemory(ConnInfo.SerialNumber, Info.InstanceName, MAX_NAME_LENGTH);
+            if (strlen(Info.SerialNumber))
+                RtlCopyMemory(ConnInfo.SerialNumber, Info.SerialNumber, MAX_NAME_LENGTH);
+            else
+                RtlCopyMemory(ConnInfo.SerialNumber, Info.InstanceName, MAX_NAME_LENGTH);
             ConnInfo.BlockSize = (UINT16)Info.BlockSize;
             ConnInfo.DiskSize = Info.BlockSize * Info.BlockCount;
             ConnInfo.Pid = IoGetRequestorProcessId(Irp);
             ConnInfo.UseWvbdAPI = 1;
             // TODO: populate NBD flags
 
-            WNBD_LOG_INFO("Mapping disk. Name: %s, BC=%llu, BS=%lu, Pid=%d",
-                          Info.InstanceName, Info.BlockCount, Info.BlockSize, ConnInfo.Pid);
+            WNBD_LOG_INFO("Mapping disk. Name: %s, Serial=%s, BC=%llu, BS=%lu, Pid=%d",
+                          Info.InstanceName, Info.SerialNumber,
+                          Info.BlockCount, Info.BlockSize, ConnInfo.Pid);
 
             if(WnbdFindConnection(GInfo, ConnInfo.InstanceName, NULL)) {
                 ExReleaseResourceLite(&GInfo->ConnectionMutex);
