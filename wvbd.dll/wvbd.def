@@ -1,7 +1,13 @@
 EXPORTS
     WvbdCreate
     WvbdRemove
+    WvbdRemoveEx
     WvbdClose
+
+    WvbdList
+    WvbdGetStats
+    WvbdGetDriverStats
+    WvbdRaiseLogLevel
 
     WvbdSetSenseEx
     WvbdSetSense
@@ -11,8 +17,11 @@ EXPORTS
     WvbdSendResponse
 
     WvbdOpenDevice
+    WvbdIoctlPing
     WvbdIoctlCreate
     WvbdIoctlRemove
-    WvbdIoctlRemoveEx
+    WvbdIoctlList
+    WvbdIoctlStats
+    WvbdIoctlReloadConfig
     WvbdIoctlFetchRequest
     WvbdIoctlSendResponse

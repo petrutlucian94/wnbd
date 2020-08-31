@@ -7,6 +7,9 @@
 
 #include "wvbd.h"
 
+#define STRING_OVERFLOWS(Str, MaxLen) (strlen(Str + 1) > MaxLen)
+
+
 VOID LogMessage(PWVBD_DEVICE Device, WvbdLogLevel LogLevel,
                 const char* FileName, UINT32 Line, const char* FunctionName,
                 const char* Format, ...) {
@@ -17,7 +20,7 @@ VOID LogMessage(PWVBD_DEVICE Device, WvbdLogLevel LogLevel,
     va_list Args;
     va_start(Args, Format);
 
-    size_t BufferLength = _vscprintf(Format, Args) + 1;
+    size_t BufferLength = (size_t)_vscprintf(Format, Args) + 1;
     char* Buff = (char*) malloc(BufferLength);
     if (!Buff)
         return;
@@ -151,11 +154,107 @@ DWORD WvbdRemove(PWVBD_DEVICE Device)
     if (ErrorCode && ErrorCode != ERROR_FILE_NOT_FOUND) {
         LogError(Device, "Could not remove WVBD virtual disk. Error: %d.", ErrorCode);
     }
-    else {
-        Device->Handle = INVALID_HANDLE_VALUE;
-    }
 
     return ErrorCode;
+}
+
+DWORD WvbdRemoveEx(const char* InstanceName)
+{
+    HANDLE Handle = WvbdOpenDevice();
+
+    if (Handle == INVALID_HANDLE_VALUE || !Handle) {
+        return ERROR_OPEN_FAILED;
+    }
+
+    DWORD Status = WvbdIoctlRemove(Handle, InstanceName);
+
+    CloseHandle(Handle);
+    return Status;
+}
+
+DWORD WvbdList(PWVBD_CONNECTION_LIST* ConnectionList)
+{
+    HANDLE Handle = WvbdOpenDevice();
+
+    if (Handle == INVALID_HANDLE_VALUE || !Handle) {
+        return ERROR_OPEN_FAILED;
+    }
+
+    DWORD Status = WvbdIoctlList(Handle, ConnectionList);
+
+    CloseHandle(Handle);
+    return Status;
+}
+
+DWORD WvbdGetStats(PWVBD_DEVICE Device, PWVBD_STATS Stats, PULONG BufferSize)
+{
+    if (*BufferSize < sizeof(WVBD_DRV_STATS)) {
+        return ERROR_INSUFFICIENT_BUFFER;
+    }
+
+    memcpy(Stats, &Device->Stats, sizeof(WVBD_STATS));
+    *BufferSize = sizeof(WVBD_STATS);
+
+    return ERROR_SUCCESS;
+}
+
+
+DWORD WvbdGetDriverStats(const char* InstanceName, PWVBD_DRV_STATS Stats, PULONG BufferSize)
+{
+    HANDLE Handle = WvbdOpenDevice();
+
+    if (Handle == INVALID_HANDLE_VALUE || !Handle) {
+        return ERROR_OPEN_FAILED;
+    }
+
+    DWORD Status = WvbdIoctlStats(Handle, InstanceName, Stats, BufferSize);
+
+    CloseHandle(Handle);
+    return Status;
+}
+
+DWORD OpenRegistryKey(HKEY RootKey, LPCSTR KeyName, BOOLEAN Create, HKEY* OutKey)
+{
+    HKEY Key = NULL;
+    DWORD Status = RegOpenKeyExA(RootKey, KeyName, 0, KEY_ALL_ACCESS, &Key);
+
+    if (Status == ERROR_FILE_NOT_FOUND && Create)
+    {
+        Status = RegCreateKeyExA(RootKey, KeyName, 0, NULL, REG_OPTION_NON_VOLATILE,
+                                 KEY_ALL_ACCESS, NULL, &Key, NULL);
+    }
+
+    if (!Status) {
+        *OutKey = Key;
+    }
+
+    return Status;
+}
+
+DWORD WvbdRaiseLogLevel(USHORT LogLevel)
+{
+    HANDLE Handle = WvbdOpenDevice();
+
+    if (Handle == INVALID_HANDLE_VALUE || !Handle) {
+        return ERROR_OPEN_FAILED;
+    }
+
+    HKEY hKey = NULL;
+    DWORD Status = OpenRegistryKey(HKEY_LOCAL_MACHINE, WVBD_REGISTRY_KEY,
+                                   TRUE, &hKey);
+    if (Status)
+        goto Exit;
+
+    Status = RegSetValueExA(hKey, "DebugLogLevel", 0, REG_DWORD,
+                            (LPBYTE)&LogLevel, sizeof(DWORD));
+    if (Status)
+        goto Exit;
+
+    Status = WvbdIoctlReloadConfig(Handle);
+
+Exit:
+    CloseHandle(Handle);
+    return Status;
 }
 
 void WvbdClose(PWVBD_DEVICE Device)

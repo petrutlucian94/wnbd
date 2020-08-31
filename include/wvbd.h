@@ -109,8 +109,18 @@ DWORD WvbdCreate(
     WvbdLogLevel LogLevel,
     PWVBD_DEVICE* PDevice);
 DWORD WvbdRemove(PWVBD_DEVICE Device);
+DWORD WvbdRemoveEx(const char* InstanceName);
 VOID WvbdClose(PWVBD_DEVICE Device);
 
+DWORD WvbdList(PWVBD_CONNECTION_LIST* ConnectionList);
+// Userspace counters
+DWORD WvbdGetStats(PWVBD_DEVICE Device, PWVBD_STATS Stats, PULONG BufferSize);
+// Driver counters
+DWORD WvbdGetDriverStats(
+    const char* InstanceName,
+    PWVBD_DRV_STATS Stats,
+    PULONG BufferSize);
+DWORD WvbdRaiseLogLevel(USHORT LogLevel);
 
 void WvbdSetSenseEx(
     PWVBD_STATUS Status,
@@ -128,12 +138,22 @@ DWORD WvbdSendResponse(
     UINT32 DataBufferSize);
 
 HANDLE WvbdOpenDevice();
+DWORD WvbdIoctlPing(HANDLE Device);
+
 DWORD WvbdIoctlCreate(
     HANDLE Device,
     PWVBD_PROPERTIES Properties,
     PWVBD_DISK_HANDLE DiskHandle);
 DWORD WvbdIoctlRemove(HANDLE Device, const char* InstanceName);
-DWORD WvbdIoctlRemoveEx(const char* InstanceName);
+// TODO: buffer size arg
+DWORD WvbdIoctlList(HANDLE Device, PWVBD_CONNECTION_LIST* ConnectionList);
+DWORD WvbdIoctlStats(
+    HANDLE Device,
+    const char* InstanceName,
+    PWVBD_DRV_STATS Stats,
+    PULONG BufferSize);
+// Reload the persistent settings provided through registry keys.
+DWORD WvbdIoctlReloadConfig(HANDLE Device);
 
 // The disk handle should be handled carefully in order to avoid delayed replies
 // from being submitted to other disks after being remapped.

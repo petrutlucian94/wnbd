@@ -18,8 +18,9 @@
 #include "wvbd_ioctl.h"
 #include "util.h"
 
-#define CHECK_I_LOCATION(Io, Size) (Io->Parameters.DeviceIoControl.InputBufferLength < sizeof(Size))
-#define CHECK_O_LOCATION(Io, Size) (Io->Parameters.DeviceIoControl.OutputBufferLength < sizeof(Size))
+#define CHECK_I_LOCATION(Io, Type) (Io->Parameters.DeviceIoControl.InputBufferLength < sizeof(Type))
+#define CHECK_O_LOCATION(Io, Type) (Io->Parameters.DeviceIoControl.OutputBufferLength < sizeof(Type))
+#define CHECK_O_LOCATION_SZ(Io, Size) (Io->Parameters.DeviceIoControl.OutputBufferLength < Size)
 #define Malloc(S) ExAllocatePoolWithTag(NonPagedPoolNx, (S), 'DBNu')
 
 extern UNICODE_STRING GlobalRegistryPath;
@@ -614,6 +615,7 @@ WnbdDeleteConnection(PGLOBAL_INFORMATION GInfo,
     return Status;
 }
 
+// TODO: deprecate this in favor of WnbdEnumerateActiveConnectionsEx
 _Use_decl_annotations_
 NTSTATUS
 WnbdEnumerateActiveConnections(PGLOBAL_INFORMATION GInfo,
@@ -670,6 +672,64 @@ WnbdEnumerateActiveConnections(PGLOBAL_INFORMATION GInfo,
 
 _Use_decl_annotations_
 NTSTATUS
+WnbdEnumerateActiveConnectionsEx(PGLOBAL_INFORMATION GInfo, PIRP Irp)
+{
+    WNBD_LOG_LOUD(": Enter");
+    ASSERT(GInfo);
+    ASSERT(Irp);
+
+    PUSER_ENTRY CurrentEntry = (PUSER_ENTRY)GInfo->ConnectionList.Flink;
+    PIO_STACK_LOCATION IoLocation = IoGetCurrentIrpStackLocation(Irp);
+    PWVBD_CONNECTION_LIST OutList = (PWVBD_CONNECTION_LIST) Irp->AssociatedIrp.SystemBuffer;
+    PWVBD_CONNECTION_INFO OutEntry = &OutList->Connections[0];
+
+    NTSTATUS Status = STATUS_BUFFER_OVERFLOW;
+    ULONG Remaining = (
+        IoLocation->Parameters.DeviceIoControl.OutputBufferLength -
+            RTL_SIZEOF_THROUGH_FIELD(WVBD_CONNECTION_LIST, Count)
+        ) / sizeof(WVBD_CONNECTION_INFO);
+    OutList->Count = 0;
+    OutList->ElementSize = sizeof(WVBD_CONNECTION_INFO);
+
+    while((CurrentEntry != (PUSER_ENTRY) &GInfo->ConnectionList.Flink) && Remaining) {
+        OutEntry = &OutList->Connections[OutList->Count];
+        RtlZeroMemory(OutEntry, sizeof(WVBD_CONNECTION_INFO));
+
+        // TODO: we'll avoid converting those structures once we use the new version internally.
+        // We're also skipping NBD params for now.
+        RtlCopyMemory(OutEntry->Properties.InstanceName, &CurrentEntry->UserInformation.InstanceName, MAX_NAME_LENGTH);
+        RtlCopyMemory(OutEntry->Properties.SerialNumber, &CurrentEntry->UserInformation.SerialNumber, MAX_NAME_LENGTH);
+
+        OutEntry->Properties.Pid = CurrentEntry->UserInformation.Pid;
+        OutEntry->Properties.BlockSize = CurrentEntry->UserInformation.BlockSize;
+        OutEntry->Properties.BlockCount = CurrentEntry->UserInformation.DiskSize / CurrentEntry->UserInformation.BlockSize;
+        OutEntry->Properties.Flags.UseNbd = !CurrentEntry->UserInformation.UseWvbdAPI;
+
+        RtlCopyMemory(OutEntry, &CurrentEntry->UserInformation, sizeof(CONNECTION_INFO));
+
+        OutEntry->BusNumber = (USHORT)CurrentEntry->BusIndex;
+        OutEntry->TargetId = (USHORT)CurrentEntry->TargetIndex;
+        OutEntry->Lun = (USHORT)CurrentEntry->LunIndex;
+
+        OutList->Count++;
+        Remaining--;
+
+        CurrentEntry = (PUSER_ENTRY)CurrentEntry->ListEntry.Flink;
+    }
+
+    if(CurrentEntry == (PUSER_ENTRY) &GInfo->ConnectionList.Flink) {
+        Status = STATUS_SUCCESS;
+    }
+
+    Irp->IoStatus.Information = (OutList->Count * sizeof(WVBD_CONNECTION_INFO)) +
+        RTL_SIZEOF_THROUGH_FIELD(WVBD_CONNECTION_LIST, Count);
+    WNBD_LOG_LOUD(": Exit: %d", Status);
+
+    return Status;
+}
+
+_Use_decl_annotations_
+NTSTATUS
 WnbdParseUserIOCTL(PVOID GlobalHandle,
                    PIRP Irp)
 {
@@ -699,8 +759,9 @@ WnbdParseUserIOCTL(PVOID GlobalHandle,
         switch(Code->IoCode) {
 
         case IOCTL_WNBD_PORT:
+        case IOCTL_WVBD_PING:
             {
-            WNBD_LOG_LOUD("IOCTL_WNBDVMPORT_SCSIPORT");
+            WNBD_LOG_LOUD("IOCTL_WVBD_PING");
             Status = STATUS_SUCCESS;
             }
             break;
@@ -797,14 +858,14 @@ WnbdParseUserIOCTL(PVOID GlobalHandle,
             break;
 
         case IOCTL_WNBD_DEBUG:
+        case IOCTL_WVBD_RELOAD_CONFIG:
         {
-            WNBD_LOG_LOUD("IOCTL_WNBDVM_DEBUG");
-            WCHAR* DebugKey = L"DebugLogLevel";
-            UINT32 temp = 0;
-
-            if (WNBDReadRegistryValue(&GlobalRegistryPath, DebugKey,
-                (REG_DWORD << RTL_QUERY_REGISTRY_TYPECHECK_SHIFT), &temp)) {
-                WnbdSetLogLevel(temp);
+            WNBD_LOG_LOUD("IOCTL_WVBD_RELOAD_CONFIG");
+            WCHAR* KeyName = L"DebugLogLevel";
+            UINT32 U32Val = 0;
+            if (WNBDReadRegistryValue(&GlobalRegistryPath, KeyName,
+                (REG_DWORD << RTL_QUERY_REGISTRY_TYPECHECK_SHIFT), &U32Val)) {
+                WnbdSetLogLevel(U32Val);
             }
         }
         break;
@@ -1016,7 +1077,6 @@ WnbdParseUserIOCTL(PVOID GlobalHandle,
             WNBD_LOG_LOUD("IOCTL_WVBD_SEND_RSP");
             PWVBD_IOCTL_SEND_RSP_COMMAND RspCmd =
                 (PWVBD_IOCTL_SEND_RSP_COMMAND) Irp->AssociatedIrp.SystemBuffer;
-            // TODO: check if we can alter the input buffer without passing it twice.
             if(!RspCmd || CHECK_I_LOCATION(IoLocation, PWVBD_IOCTL_FETCH_REQ_COMMAND)) {
                 WNBD_LOG_ERROR(": IOCTL = 0x%x. Bad input/output buffer",
                     IoLocation->Parameters.DeviceIoControl.IoControlCode);
@@ -1024,8 +1084,6 @@ WnbdParseUserIOCTL(PVOID GlobalHandle,
                 break;
             }
 
-            // TODO: do we actually need to enter a critical section and
-            // use the connection mutex?
             KeEnterCriticalRegion();
             ExAcquireResourceExclusiveLite(&GInfo->ConnectionMutex, TRUE);
 
@@ -1051,6 +1109,85 @@ WnbdParseUserIOCTL(PVOID GlobalHandle,
             Status = WvbdHandleResponse(Irp, Device, RspCmd);
             WNBD_LOG_LOUD("Reply handling status: %d.", Status);
             break;
+
+        case IOCTL_WVBD_LIST:
+            {
+            WNBD_LOG_LOUD("IOCTL_WVBD_LIST");
+            KeEnterCriticalRegion();
+            ExAcquireResourceExclusiveLite(&GInfo->ConnectionMutex, TRUE);
+            DWORD RequiredBuffSize = (
+                GInfo->ConnectionCount * sizeof(WVBD_CONNECTION_INFO)) + sizeof(WVBD_CONNECTION_LIST);
+
+            if (!Irp->AssociatedIrp.SystemBuffer || CHECK_O_LOCATION_SZ(IoLocation, RequiredBuffSize)) {
+                WNBD_LOG_ERROR(": IOCTL = 0x%x. Bad output buffer",
+                    IoLocation->Parameters.DeviceIoControl.IoControlCode);
+
+                Irp->IoStatus.Information = RequiredBuffSize;
+                ExReleaseResourceLite(&GInfo->ConnectionMutex);
+                KeLeaveCriticalRegion();
+                break;
+            }
+            Status = WnbdEnumerateActiveConnectionsEx(GInfo, Irp);
+            ExReleaseResourceLite(&GInfo->ConnectionMutex);
+            KeLeaveCriticalRegion();
+            }
+            break;
+
+        case IOCTL_WVBD_STATS:
+        {
+            WNBD_LOG_LOUD("WVBD_STATS");
+            PWVBD_IOCTL_STATS_COMMAND StatsCmd =
+                (PWVBD_IOCTL_STATS_COMMAND) Irp->AssociatedIrp.SystemBuffer;
+
+            if(!StatsCmd || CHECK_I_LOCATION(IoLocation, WVBD_IOCTL_STATS_COMMAND)) {
+                WNBD_LOG_ERROR(": IOCTL = 0x%x. Bad input buffer",
+                    IoLocation->Parameters.DeviceIoControl.IoControlCode);
+                Status = STATUS_INVALID_PARAMETER;
+                break;
+            }
+
+            StatsCmd->InstanceName[MAX_NAME_LENGTH] = '\0';
+            if(!strlen((PSTR) &StatsCmd->InstanceName)) {
+                WNBD_LOG_ERROR(": IOCTL = 0x%x. InstanceName Error",
+                    IoLocation->Parameters.DeviceIoControl.IoControlCode);
+                Status = STATUS_INVALID_PARAMETER;
+                break;
+            }
+
+            KeEnterCriticalRegion();
+            ExAcquireResourceExclusiveLite(&GInfo->ConnectionMutex, TRUE);
+            if(!Irp->AssociatedIrp.SystemBuffer || CHECK_O_LOCATION(IoLocation,
+                    WVBD_DRV_STATS)) {
+                WNBD_LOG_ERROR(": IOCTL = 0x%x. Bad output buffer",
+                    IoLocation->Parameters.DeviceIoControl.IoControlCode);
+
+                Irp->IoStatus.Information = sizeof(WVBD_DRV_STATS);
+                ExReleaseResourceLite(&GInfo->ConnectionMutex);
+                KeLeaveCriticalRegion();
+                break;
+            }
+
+            PUSER_ENTRY DiskEntry = NULL;
+            if(!WnbdFindConnection(GInfo, StatsCmd->InstanceName, &DiskEntry)) {
+                ExReleaseResourceLite(&GInfo->ConnectionMutex);
+                KeLeaveCriticalRegion();
+                Status = STATUS_OBJECT_NAME_NOT_FOUND;
+                WNBD_LOG_ERROR(": IOCTL = 0x%x. Connection does not exist",
+                    IoLocation->Parameters.DeviceIoControl.IoControlCode);
+                break;
+            }
+
+            PWNBD_STATS OutStatus = (PWNBD_STATS) Irp->AssociatedIrp.SystemBuffer;
+            RtlCopyMemory(OutStatus, &DiskEntry->ScsiInformation->Stats,
+                          sizeof(WVBD_DRV_STATS));
+
+            Irp->IoStatus.Information = sizeof(WVBD_DRV_STATS);
+            ExReleaseResourceLite(&GInfo->ConnectionMutex);
+            KeLeaveCriticalRegion();
+
+            Status = STATUS_SUCCESS;
+        }
+        break;
 
         default:
             {

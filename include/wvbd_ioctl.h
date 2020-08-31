@@ -3,7 +3,7 @@
 
 #include <userspace_shared.h>
 
-#define STRING_OVERFLOWS(Str, MaxLen) (strlen(Str + 1) > MaxLen)
+#define WVBD_REGISTRY_KEY "SYSTEM\\CurrentControlSet\\Services\\wnbd"
 
 #define IOCTL_WVBD_PING \
     CTL_CODE(FILE_DEVICE_WNBD, USER_WNBD_IOCTL_START+10, METHOD_BUFFERED, FILE_READ_ACCESS)
@@ -19,7 +19,7 @@
     CTL_CODE(FILE_DEVICE_WNBD, USER_WNBD_IOCTL_START+15, METHOD_BUFFERED, FILE_READ_ACCESS)
 #define IOCTL_WVBD_STATS \
     CTL_CODE(FILE_DEVICE_WNBD, USER_WNBD_IOCTL_START+16, METHOD_BUFFERED, FILE_READ_ACCESS)
-#define IOCTL_WVBD_RAISE_LOG_LEVEL \
+#define IOCTL_WVBD_RELOAD_CONFIG \
     CTL_CODE(FILE_DEVICE_WNBD, USER_WNBD_IOCTL_START+17, METHOD_BUFFERED, FILE_WRITE_ACCESS)
 
 
@@ -94,23 +94,25 @@ typedef struct
     // The userspace process associated with this device.
     INT Pid;
     NBD_CONNECTION_PROPERTIES NbdProperties;
+    UINT64 Reserved[32];
 } WVBD_PROPERTIES, *PWVBD_PROPERTIES;
 
 typedef struct
 {
     WVBD_PROPERTIES Properties;
-    BOOLEAN Connected;
     BOOLEAN Disconnecting;
     USHORT BusNumber;
     USHORT TargetId;
     USHORT Lun;
-} WVBD_ATTACHMENT_INFO, *PWVBD_ATTACHMENT_INFO;
+    UINT64 Reserved[16];
+} WVBD_CONNECTION_INFO, *PWVBD_CONNECTION_INFO;
 
 typedef struct
 {
     UINT32 Count;
-    WVBD_ATTACHMENT_INFO Attachments[1];
-} WVBD_ATTACHMENT_LIST, *PWVBD_ATTACHMENT_LIST;
+    UINT32 ElementSize;
+    WVBD_CONNECTION_INFO Connections[1];
+} WVBD_CONNECTION_LIST, *PWVBD_CONNECTION_LIST;
 
 typedef struct
 {
@@ -122,6 +124,7 @@ typedef struct
     INT64 AbortedSubmittedIORequests;
     INT64 AbortedUnsubmittedIORequests;
     INT64 CompletedAbortedIORequests;
+    INT64 Reserved[16];
 } WVBD_DRV_STATS, *PWVBD_DRV_STATS;
 
 typedef struct
@@ -164,6 +167,7 @@ typedef struct
             UINT32 Reserved:31;
         } Unmap;
     } Cmd;
+    UINT64 Reserved[4];
 } WVBD_IO_REQUEST, *PWVBD_IO_REQUEST;
 
 typedef struct
@@ -171,6 +175,7 @@ typedef struct
     UINT64 RequestHandle;
     WvbdRequestType RequestType;
     WVBD_STATUS Status;
+    UINT64 Reserved[4];
 } WVBD_IO_RESPONSE, *PWVBD_IO_RESPONSE;
 
 typedef struct
@@ -181,11 +186,11 @@ typedef struct
 typedef WVBD_IOCTL_BASE_COMMAND WVBD_IOCTL_PING_COMMAND;
 typedef PWVBD_IOCTL_BASE_COMMAND PWVBD_IOCTL_PING_COMMAND;
 
-typedef WVBD_IOCTL_BASE_COMMAND WVBD_IOCTL_STATS_COMMAND;
-typedef PWVBD_IOCTL_BASE_COMMAND PWVBD_IOCTL_STATS_COMMAND;
-
 typedef WVBD_IOCTL_BASE_COMMAND WVBD_IOCTL_LIST_COMMAND;
 typedef PWVBD_IOCTL_BASE_COMMAND PWVBD_IOCTL_LIST_COMMAND;
+
+typedef WVBD_IOCTL_BASE_COMMAND WVBD_IOCTL_RELOAD_CONFIG_COMMAND;
+typedef PWVBD_IOCTL_BASE_COMMAND PWVBD_IOCTL_RELOAD_CONFIG_COMMAND;
 
 typedef struct
 {
@@ -198,6 +203,12 @@ typedef struct
     ULONG IoControlCode;
     CHAR InstanceName[MAX_NAME_LENGTH];
 } WVBD_IOCTL_REMOVE_COMMAND, *PWVBD_IOCTL_REMOVE_COMMAND;
+
+typedef struct
+{
+    ULONG IoControlCode;
+    CHAR InstanceName[MAX_NAME_LENGTH];
+} WVBD_IOCTL_STATS_COMMAND, *PWVBD_IOCTL_STATS_COMMAND;
 
 typedef struct
 {
@@ -216,12 +227,6 @@ typedef struct
     PVOID DataBuffer;
     UINT32 DataBufferSize;
 } WVBD_IOCTL_SEND_RSP_COMMAND, *PWVBD_IOCTL_SEND_RSP_COMMAND;
-
-typedef struct
-{
-    ULONG IoControlCode;
-    USHORT LogLevel;
-} WVBD_IOCTL_RAISE_LOG_LEVEL_COMMAND, *PWVBD_IOCTL_RAISE_LOG_LEVEL_COMMAND;
 
 static inline const CHAR* WvbdRequestTypeToStr(WvbdRequestType RequestType) {
     switch(RequestType)
