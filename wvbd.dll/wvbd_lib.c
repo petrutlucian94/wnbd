@@ -67,6 +67,9 @@ DWORD WvbdCreate(
     if (STRING_OVERFLOWS(Properties->SerialNumber, MAX_NAME_LENGTH)) {
         return ERROR_BUFFER_OVERFLOW;
     }
+    if (STRING_OVERFLOWS(Properties->Owner, MAX_OWNER_LENGTH)) {
+        return ERROR_BUFFER_OVERFLOW;
+    }
 
     Device = (PWVBD_DEVICE)calloc(1, sizeof(WVBD_DEVICE));
     if (!Device) {
@@ -80,19 +83,30 @@ DWORD WvbdCreate(
     Device->Handle = WvbdOpenDevice();
 
     LogDebug(Device,
-             "Mapping device. Name=%s, Serial=%s, BC=%llu, BS=%lu, RO=%u, "
-             "Cache=%u, Unmap=%u, UnmapAnchor=%u, MaxUnmapDescCount=%u, "
-             "MaxTransferLength=%u.",
+             "Mapping device. Name=%s, Serial=%s, Owner=%s, "
+             "BC=%llu, BS=%lu, RO=%u, Flush=%u, Unmap=%u, UnmapAnchor=%u, "
+             "Nbd=%u, MaxUnmapDescCount=%u, MaxTransferLength=%u.",
              Properties->InstanceName,
              Properties->SerialNumber,
+             Properties->Owner,
              Properties->BlockCount,
              Properties->BlockSize,
-             Properties->ReadOnly,
-             Properties->FlushSupported,
-             Properties->UnmapSupported,
-             Properties->UnmapAnchorSupported,
+             Properties->Flags.ReadOnly,
+             Properties->Flags.FlushSupported,
+             Properties->Flags.UnmapSupported,
+             Properties->Flags.UnmapAnchorSupported,
+             Properties->Flags.UseNbd,
              Properties->MaxUnmapDescCount,
              Properties->MaxTransferLength);
+    if (Properties->Flags.UseNbd) {
+        LogDebug(Device,
+             "Nbd properties: Hostname=%s, Port=%u, ExportName=%s, "
+             "SkipNegotiation=%u.",
+             Properties->NbdProperties.Hostname,
+             Properties->NbdProperties.PortNumber,
+             Properties->NbdProperties.ExportName,
+             Properties->NbdProperties.SkipNegotiation);
+    }
 
     if (Device->Handle == INVALID_HANDLE_VALUE || !Device->Handle) {
         ErrorCode = ERROR_OPEN_FAILED;
@@ -312,7 +326,7 @@ VOID WvbdHandleRequest(PWVBD_DEVICE Device, PWVBD_IO_REQUEST Request,
             break;
         case WvbdReqTypeFlush:
             // TODO: should it be a no-op when unsupported?
-            if (!Device->Interface->Flush || !Device->Properties.FlushSupported)
+            if (!Device->Interface->Flush || !Device->Properties.Flags.FlushSupported)
                 goto Unsupported;
             LogDebug(Device, "Dispatching FLUSH @ 0x%llx~0x%x # %llx." ,
                      Request->Cmd.Flush.BlockAddress,
@@ -324,9 +338,9 @@ VOID WvbdHandleRequest(PWVBD_DEVICE Device, PWVBD_IO_REQUEST Request,
                 Request->Cmd.Flush.BlockAddress,
                 Request->Cmd.Flush.BlockCount);
         case WvbdReqTypeUnmap:
-            if (!Device->Interface->Unmap || !Device->Properties.UnmapSupported)
+            if (!Device->Interface->Unmap || !Device->Properties.Flags.UnmapSupported)
                 goto Unsupported;
-            if (!Device->Properties.UnmapAnchorSupported &&
+            if (!Device->Properties.Flags.UnmapAnchorSupported &&
                 Request->Cmd.Unmap.Anchor)
             {
                 AdditionalSenseCode = SCSI_ADSENSE_INVALID_CDB;

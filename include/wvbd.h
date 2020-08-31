@@ -21,7 +21,9 @@ typedef enum
     WvbdLogLevelTrace = 5
 } WvbdLogLevel;
 
-typedef struct _WVBD_STATS {
+// Userspace stats.
+typedef struct _WVBD_STATS
+{
     UINT64 TotalReceivedRequests;
     UINT64 TotalSubmittedRequests;
     UINT64 TotalReceivedReplies;

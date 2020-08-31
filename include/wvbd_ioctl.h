@@ -5,10 +5,25 @@
 
 #define STRING_OVERFLOWS(Str, MaxLen) (strlen(Str + 1) > MaxLen)
 
-#define IOCTL_WVBD_CREATE      CTL_CODE(FILE_DEVICE_WNBD, USER_WNBD_IOCTL_START+11, METHOD_BUFFERED, FILE_WRITE_ACCESS)
-#define IOCTL_WVBD_REMOVE      CTL_CODE(FILE_DEVICE_WNBD, USER_WNBD_IOCTL_START+12, METHOD_BUFFERED, FILE_WRITE_ACCESS)
-#define IOCTL_WVBD_FETCH_REQ   CTL_CODE(FILE_DEVICE_WNBD, USER_WNBD_IOCTL_START+13, METHOD_BUFFERED, FILE_WRITE_ACCESS)
-#define IOCTL_WVBD_SEND_RSP    CTL_CODE(FILE_DEVICE_WNBD, USER_WNBD_IOCTL_START+14, METHOD_BUFFERED, FILE_WRITE_ACCESS)
+#define IOCTL_WVBD_PING \
+    CTL_CODE(FILE_DEVICE_WNBD, USER_WNBD_IOCTL_START+10, METHOD_BUFFERED, FILE_READ_ACCESS)
+#define IOCTL_WVBD_CREATE \
+    CTL_CODE(FILE_DEVICE_WNBD, USER_WNBD_IOCTL_START+11, METHOD_BUFFERED, FILE_WRITE_ACCESS)
+#define IOCTL_WVBD_REMOVE \
+    CTL_CODE(FILE_DEVICE_WNBD, USER_WNBD_IOCTL_START+12, METHOD_BUFFERED, FILE_WRITE_ACCESS)
+#define IOCTL_WVBD_FETCH_REQ \
+    CTL_CODE(FILE_DEVICE_WNBD, USER_WNBD_IOCTL_START+13, METHOD_BUFFERED, FILE_WRITE_ACCESS)
+#define IOCTL_WVBD_SEND_RSP \
+    CTL_CODE(FILE_DEVICE_WNBD, USER_WNBD_IOCTL_START+14, METHOD_BUFFERED, FILE_WRITE_ACCESS)
+#define IOCTL_WVBD_LIST \
+    CTL_CODE(FILE_DEVICE_WNBD, USER_WNBD_IOCTL_START+15, METHOD_BUFFERED, FILE_READ_ACCESS)
+#define IOCTL_WVBD_STATS \
+    CTL_CODE(FILE_DEVICE_WNBD, USER_WNBD_IOCTL_START+16, METHOD_BUFFERED, FILE_READ_ACCESS)
+#define IOCTL_WVBD_RAISE_LOG_LEVEL \
+    CTL_CODE(FILE_DEVICE_WNBD, USER_WNBD_IOCTL_START+17, METHOD_BUFFERED, FILE_WRITE_ACCESS)
+
+
+#define MAX_OWNER_LENGTH 16
 
 typedef enum
 {
@@ -38,18 +53,76 @@ typedef struct
 
 typedef struct
 {
-    CHAR InstanceName[MAX_NAME_LENGTH];
-    CHAR SerialNumber[MAX_NAME_LENGTH];
-    UINT64 BlockCount;
-    UINT32 BlockSize;
+    CHAR Hostname[MAX_NAME_LENGTH];
+    UINT32 PortNumber;
+    CHAR ExportName[MAX_NAME_LENGTH];
+    // Skip NBD negotiation and jump directly to the
+    // transmission phase.
+    BOOLEAN SkipNegotiation;
+} NBD_CONNECTION_PROPERTIES, *PNBD_CONNECTION_PROPERTIES;
+
+typedef struct
+{
     UINT32 ReadOnly:1;
     UINT32 FlushSupported:1;
     UINT32 UnmapSupported:1;
     UINT32 UnmapAnchorSupported:1;
+    // Connect to an NBD server. If disabled, IO requests and replies will
+    // be submitted through the IOCTL_WVBD_FETCH_REQ/IOCTL_WVBD_SEND_RSP
+    // DeviceIoControl commands.
+    UINT32 UseNbd:1;
+    UINT32 Reserved: 27;
+} WVBD_FLAGS, *PWVBD_FLAGS;
+
+typedef struct
+{
+    // Unique disk identifier
+    CHAR InstanceName[MAX_NAME_LENGTH];
+    // If no serial number is provided, the instance name will be used.
+    // This will be exposed through the VPD page.
+    CHAR SerialNumber[MAX_NAME_LENGTH];
+    // Optional string used to identify the owner of this disk
+    // (e.g. can be the project name).
+    CHAR Owner[MAX_OWNER_LENGTH];
+    WVBD_FLAGS Flags;
+    UINT64 BlockCount;
+    UINT32 BlockSize;
     UINT32 MaxUnmapDescCount;
     UINT32 MaxTransferLength;
+    // Maximum number of pending IO requests at any given time.
     UINT32 MaxOutstandingIO;
+    // The userspace process associated with this device.
+    INT Pid;
+    NBD_CONNECTION_PROPERTIES NbdProperties;
 } WVBD_PROPERTIES, *PWVBD_PROPERTIES;
+
+typedef struct
+{
+    WVBD_PROPERTIES Properties;
+    BOOLEAN Connected;
+    BOOLEAN Disconnecting;
+    USHORT BusNumber;
+    USHORT TargetId;
+    USHORT Lun;
+} WVBD_ATTACHMENT_INFO, *PWVBD_ATTACHMENT_INFO;
+
+typedef struct
+{
+    UINT32 Count;
+    WVBD_ATTACHMENT_INFO Attachments[1];
+} WVBD_ATTACHMENT_LIST, *PWVBD_ATTACHMENT_LIST;
+
+typedef struct
+{
+    INT64 TotalReceivedIORequests;
+    INT64 TotalSubmittedIORequests;
+    INT64 TotalReceivedIOReplies;
+    INT64 UnsubmittedIORequests;
+    INT64 PendingSubmittedIORequests;
+    INT64 AbortedSubmittedIORequests;
+    INT64 AbortedUnsubmittedIORequests;
+    INT64 CompletedAbortedIORequests;
+} WVBD_DRV_STATS, *PWVBD_DRV_STATS;
 
 typedef struct
 {
@@ -103,6 +176,20 @@ typedef struct
 typedef struct
 {
     ULONG IoControlCode;
+} WVBD_IOCTL_BASE_COMMAND, *PWVBD_IOCTL_BASE_COMMAND;
+
+typedef WVBD_IOCTL_BASE_COMMAND WVBD_IOCTL_PING_COMMAND;
+typedef PWVBD_IOCTL_BASE_COMMAND PWVBD_IOCTL_PING_COMMAND;
+
+typedef WVBD_IOCTL_BASE_COMMAND WVBD_IOCTL_STATS_COMMAND;
+typedef PWVBD_IOCTL_BASE_COMMAND PWVBD_IOCTL_STATS_COMMAND;
+
+typedef WVBD_IOCTL_BASE_COMMAND WVBD_IOCTL_LIST_COMMAND;
+typedef PWVBD_IOCTL_BASE_COMMAND PWVBD_IOCTL_LIST_COMMAND;
+
+typedef struct
+{
+    ULONG IoControlCode;
     WVBD_PROPERTIES Properties;
 } WVBD_IOCTL_CREATE_COMMAND, *PWVBD_IOCTL_CREATE_COMMAND;
 
@@ -129,6 +216,12 @@ typedef struct
     PVOID DataBuffer;
     UINT32 DataBufferSize;
 } WVBD_IOCTL_SEND_RSP_COMMAND, *PWVBD_IOCTL_SEND_RSP_COMMAND;
+
+typedef struct
+{
+    ULONG IoControlCode;
+    USHORT LogLevel;
+} WVBD_IOCTL_RAISE_LOG_LEVEL_COMMAND, *PWVBD_IOCTL_RAISE_LOG_LEVEL_COMMAND;
 
 static inline const CHAR* WvbdRequestTypeToStr(WvbdRequestType RequestType) {
     switch(RequestType)
