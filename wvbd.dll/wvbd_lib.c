@@ -88,7 +88,7 @@ DWORD WvbdCreate(
              Properties->BlockCount,
              Properties->BlockSize,
              Properties->ReadOnly,
-             Properties->CacheSupported,
+             Properties->FlushSupported,
              Properties->UnmapSupported,
              Properties->UnmapAnchorSupported,
              Properties->MaxUnmapDescCount,
@@ -312,7 +312,7 @@ VOID WvbdHandleRequest(PWVBD_DEVICE Device, PWVBD_IO_REQUEST Request,
             break;
         case WvbdReqTypeFlush:
             // TODO: should it be a no-op when unsupported?
-            if (!Device->Interface->Flush || !Device->Properties.CacheSupported)
+            if (!Device->Interface->Flush || !Device->Properties.FlushSupported)
                 goto Unsupported;
             LogDebug(Device, "Dispatching FLUSH @ 0x%llx~0x%x # %llx." ,
                      Request->Cmd.Flush.BlockAddress,

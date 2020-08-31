@@ -43,7 +43,7 @@ typedef struct
     UINT64 BlockCount;
     UINT32 BlockSize;
     UINT32 ReadOnly:1;
-    UINT32 CacheSupported:1;
+    UINT32 FlushSupported:1;
     UINT32 UnmapSupported:1;
     UINT32 UnmapAnchorSupported:1;
     UINT32 MaxUnmapDescCount;
