@@ -5,6 +5,7 @@
  */
 
 #include <ntifs.h>
+#include <limits.h>
 
 #include <berkeley.h>
 #include <ksocket.h>
@@ -44,6 +45,7 @@ WnbdFindConnection(PGLOBAL_INFORMATION GInfo,
     ASSERT(GInfo);
     ASSERT(InstanceName);
 
+    // TODO: consider returning the "Entry" directly.
     BOOLEAN Found = FALSE;
     PUSER_ENTRY SearchEntry;
 
@@ -63,6 +65,30 @@ WnbdFindConnection(PGLOBAL_INFORMATION GInfo,
 
     WNBD_LOG_LOUD(": Exit");
     return Found;
+}
+
+_Use_decl_annotations_
+PUSER_ENTRY
+WnbdFindConnectionEx(_In_ PGLOBAL_INFORMATION GInfo,
+                     _In_ UINT64 DiskHandle)
+{
+    WNBD_LOG_LOUD(": Enter");
+    ASSERT(GInfo);
+    ASSERT(InstanceName);
+
+    PUSER_ENTRY FoundEntry = NULL;
+    PUSER_ENTRY SearchEntry = (PUSER_ENTRY)GInfo->ConnectionList.Flink;
+
+    while (SearchEntry != (PUSER_ENTRY)&GInfo->ConnectionList.Flink) {
+        if (SearchEntry->DiskHandle == DiskHandle) {
+            FoundEntry = SearchEntry;
+            break;
+        }
+        SearchEntry = (PUSER_ENTRY)SearchEntry->ListEntry.Flink;
+    }
+
+    WNBD_LOG_LOUD(": Exit");
+    return FoundEntry;
 }
 
 PVOID WnbdCreateScsiDevice(_In_ PVOID Extension,
@@ -680,7 +706,8 @@ WnbdEnumerateActiveConnectionsEx(PGLOBAL_INFORMATION GInfo, PIRP Irp)
 
     PUSER_ENTRY CurrentEntry = (PUSER_ENTRY)GInfo->ConnectionList.Flink;
     PIO_STACK_LOCATION IoLocation = IoGetCurrentIrpStackLocation(Irp);
-    PWVBD_CONNECTION_LIST OutList = (PWVBD_CONNECTION_LIST) Irp->AssociatedIrp.SystemBuffer;
+    PWVBD_CONNECTION_LIST OutList = (
+        PWVBD_CONNECTION_LIST) Irp->AssociatedIrp.SystemBuffer;
     PWVBD_CONNECTION_INFO OutEntry = &OutList->Connections[0];
 
     NTSTATUS Status = STATUS_BUFFER_OVERFLOW;
@@ -691,21 +718,26 @@ WnbdEnumerateActiveConnectionsEx(PGLOBAL_INFORMATION GInfo, PIRP Irp)
     OutList->Count = 0;
     OutList->ElementSize = sizeof(WVBD_CONNECTION_INFO);
 
-    while((CurrentEntry != (PUSER_ENTRY) &GInfo->ConnectionList.Flink) && Remaining) {
+    while ((CurrentEntry != (PUSER_ENTRY) &GInfo->ConnectionList.Flink) && Remaining) {
         OutEntry = &OutList->Connections[OutList->Count];
         RtlZeroMemory(OutEntry, sizeof(WVBD_CONNECTION_INFO));
 
-        // TODO: we'll avoid converting those structures once we use the new version internally.
-        // We're also skipping NBD params for now.
-        RtlCopyMemory(OutEntry->Properties.InstanceName, &CurrentEntry->UserInformation.InstanceName, MAX_NAME_LENGTH);
-        RtlCopyMemory(OutEntry->Properties.SerialNumber, &CurrentEntry->UserInformation.SerialNumber, MAX_NAME_LENGTH);
+        // TODO: we'll avoid converting those structures once we use
+        // the new version internally. We're also skipping NBD params for now.
+        RtlCopyMemory(OutEntry->Properties.InstanceName,
+                      &CurrentEntry->UserInformation.InstanceName, MAX_NAME_LENGTH);
+        RtlCopyMemory(OutEntry->Properties.SerialNumber,
+                      &CurrentEntry->UserInformation.SerialNumber, MAX_NAME_LENGTH);
 
         OutEntry->Properties.Pid = CurrentEntry->UserInformation.Pid;
         OutEntry->Properties.BlockSize = CurrentEntry->UserInformation.BlockSize;
-        OutEntry->Properties.BlockCount = CurrentEntry->UserInformation.DiskSize / CurrentEntry->UserInformation.BlockSize;
+        // TODO: ensure that the block size is always set.
+        if (CurrentEntry->UserInformation.BlockSize) {
+            OutEntry->Properties.BlockCount =
+                CurrentEntry->UserInformation.DiskSize /
+                CurrentEntry->UserInformation.BlockSize;
+        }
         OutEntry->Properties.Flags.UseNbd = !CurrentEntry->UserInformation.UseWvbdAPI;
-
-        RtlCopyMemory(OutEntry, &CurrentEntry->UserInformation, sizeof(CONNECTION_INFO));
 
         OutEntry->BusNumber = (USHORT)CurrentEntry->BusIndex;
         OutEntry->TargetId = (USHORT)CurrentEntry->TargetIndex;
@@ -717,13 +749,15 @@ WnbdEnumerateActiveConnectionsEx(PGLOBAL_INFORMATION GInfo, PIRP Irp)
         CurrentEntry = (PUSER_ENTRY)CurrentEntry->ListEntry.Flink;
     }
 
-    if(CurrentEntry == (PUSER_ENTRY) &GInfo->ConnectionList.Flink) {
+    if (CurrentEntry == (PUSER_ENTRY) &GInfo->ConnectionList.Flink) {
         Status = STATUS_SUCCESS;
     }
 
     Irp->IoStatus.Information = (OutList->Count * sizeof(WVBD_CONNECTION_INFO)) +
         RTL_SIZEOF_THROUGH_FIELD(WVBD_CONNECTION_LIST, Count);
-    WNBD_LOG_LOUD(": Exit: %d", Status);
+    WNBD_LOG_LOUD(": Exit: %d. Element count: %d, element size: %d. Total size: %d.",
+                  Status, OutList->Count, OutList->ElementSize,
+                  Irp->IoStatus.Information);
 
     return Status;
 }
@@ -740,8 +774,7 @@ WnbdParseUserIOCTL(PVOID GlobalHandle,
     NTSTATUS Status = STATUS_SUCCESS;
     PGLOBAL_INFORMATION	GInfo = (PGLOBAL_INFORMATION) GlobalHandle;
 
-    PWNBD_SCSI_DEVICE Device = NULL;
-    PWNBD_EXTENSION Ext = NULL;
+    PUSER_ENTRY Device = NULL;
 
     WNBD_LOG_LOUD(": DeviceIoControl = 0x%x.",
                   IoLocation->Parameters.DeviceIoControl.IoControlCode);
@@ -940,11 +973,23 @@ WnbdParseUserIOCTL(PVOID GlobalHandle,
             Info.SerialNumber[MAX_NAME_LENGTH - 1] = '\0';
 
             if(!strlen((char*)&Info.InstanceName)) {
-                WNBD_LOG_ERROR(": IOCTL = 0x%x. Invalid InstanceName",
+                WNBD_LOG_ERROR(": IOCTL = 0x%x. Invalid InstanceName.",
                     IoLocation->Parameters.DeviceIoControl.IoControlCode);
                 Status = STATUS_INVALID_PARAMETER;
                 break;
             }
+
+            // TODO: we might want to enforce a lower disk size limit.
+            if (!Info.BlockSize || !Info.BlockCount || (Info.BlockCount > ULLONG_MAX / Info.BlockSize)) {
+                WNBD_LOG_ERROR(
+                    ": IOCTL = 0x%x. Invalid block size or block count. "
+                    "Block size: %d. Block count: %lld.",
+                    IoLocation->Parameters.DeviceIoControl.IoControlCode,
+                    Info.BlockSize, Info.BlockCount);
+                Status = STATUS_INVALID_PARAMETER;
+                break;
+            }
+
             KeEnterCriticalRegion();
             ExAcquireResourceExclusiveLite(&GInfo->ConnectionMutex, TRUE);
 
@@ -1048,12 +1093,7 @@ WnbdParseUserIOCTL(PVOID GlobalHandle,
             KeEnterCriticalRegion();
             ExAcquireResourceExclusiveLite(&GInfo->ConnectionMutex, TRUE);
 
-            Ext = (PWNBD_EXTENSION)GInfo->Handle;
-            Device = WnbdFindDeviceEx(
-                Ext,
-                WVBD_DISK_HANDLE_PATH(ReqCmd->DiskHandle),
-                WVBD_DISK_HANDLE_TARGET(ReqCmd->DiskHandle),
-                WVBD_DISK_HANDLE_LUN(ReqCmd->DiskHandle));
+            Device = WnbdFindConnectionEx(GInfo, ReqCmd->DiskHandle);
 
             ExReleaseResourceLite(&GInfo->ConnectionMutex);
             KeLeaveCriticalRegion();
@@ -1067,7 +1107,7 @@ WnbdParseUserIOCTL(PVOID GlobalHandle,
                 break;
             }
 
-            Status = WvbdDispatchRequest(Irp, Device, ReqCmd);
+            Status = WvbdDispatchRequest(Irp, Device->ScsiInformation, ReqCmd);
             Irp->IoStatus.Information = sizeof(WVBD_IOCTL_FETCH_REQ_COMMAND);
             WNBD_LOG_LOUD("Request dispatch status: %d. Request type: %d Request handle: %llx",
                           Status, ReqCmd->Request.RequestType, ReqCmd->Request.RequestHandle);
@@ -1087,12 +1127,7 @@ WnbdParseUserIOCTL(PVOID GlobalHandle,
             KeEnterCriticalRegion();
             ExAcquireResourceExclusiveLite(&GInfo->ConnectionMutex, TRUE);
 
-            Ext = (PWNBD_EXTENSION)GInfo->Handle;
-            Device = WnbdFindDeviceEx(
-                Ext,
-                WVBD_DISK_HANDLE_PATH(RspCmd->DiskHandle),
-                WVBD_DISK_HANDLE_TARGET(RspCmd->DiskHandle),
-                WVBD_DISK_HANDLE_LUN(RspCmd->DiskHandle));
+            Device = WnbdFindConnectionEx(GInfo, RspCmd->DiskHandle);
 
             ExReleaseResourceLite(&GInfo->ConnectionMutex);
             KeLeaveCriticalRegion();
@@ -1106,7 +1141,7 @@ WnbdParseUserIOCTL(PVOID GlobalHandle,
                 break;
             }
 
-            Status = WvbdHandleResponse(Irp, Device, RspCmd);
+            Status = WvbdHandleResponse(Irp, Device->ScsiInformation, RspCmd);
             WNBD_LOG_LOUD("Reply handling status: %d.", Status);
             break;
 
@@ -1121,7 +1156,6 @@ WnbdParseUserIOCTL(PVOID GlobalHandle,
             if (!Irp->AssociatedIrp.SystemBuffer || CHECK_O_LOCATION_SZ(IoLocation, RequiredBuffSize)) {
                 WNBD_LOG_ERROR(": IOCTL = 0x%x. Bad output buffer",
                     IoLocation->Parameters.DeviceIoControl.IoControlCode);
-
                 Irp->IoStatus.Information = RequiredBuffSize;
                 ExReleaseResourceLite(&GInfo->ConnectionMutex);
                 KeLeaveCriticalRegion();
@@ -1146,7 +1180,7 @@ WnbdParseUserIOCTL(PVOID GlobalHandle,
                 break;
             }
 
-            StatsCmd->InstanceName[MAX_NAME_LENGTH] = '\0';
+            StatsCmd->InstanceName[MAX_NAME_LENGTH - 1] = '\0';
             if(!strlen((PSTR) &StatsCmd->InstanceName)) {
                 WNBD_LOG_ERROR(": IOCTL = 0x%x. InstanceName Error",
                     IoLocation->Parameters.DeviceIoControl.IoControlCode);
@@ -1158,9 +1192,10 @@ WnbdParseUserIOCTL(PVOID GlobalHandle,
             ExAcquireResourceExclusiveLite(&GInfo->ConnectionMutex, TRUE);
             if(!Irp->AssociatedIrp.SystemBuffer || CHECK_O_LOCATION(IoLocation,
                     WVBD_DRV_STATS)) {
+                // We must not set an error status, ERROR_INSUFFICIENT_BUFFER
+                // will be provided to the caller transparently.
                 WNBD_LOG_ERROR(": IOCTL = 0x%x. Bad output buffer",
                     IoLocation->Parameters.DeviceIoControl.IoControlCode);
-
                 Irp->IoStatus.Information = sizeof(WVBD_DRV_STATS);
                 ExReleaseResourceLite(&GInfo->ConnectionMutex);
                 KeLeaveCriticalRegion();
@@ -1177,9 +1212,10 @@ WnbdParseUserIOCTL(PVOID GlobalHandle,
                 break;
             }
 
-            PWNBD_STATS OutStatus = (PWNBD_STATS) Irp->AssociatedIrp.SystemBuffer;
+            PWVBD_DRV_STATS OutStatus = (
+                PWVBD_DRV_STATS) Irp->AssociatedIrp.SystemBuffer;
             RtlCopyMemory(OutStatus, &DiskEntry->ScsiInformation->Stats,
-                          sizeof(WVBD_DRV_STATS));
+                          sizeof(WNBD_STATS));
 
             Irp->IoStatus.Information = sizeof(WVBD_DRV_STATS);
             ExReleaseResourceLite(&GInfo->ConnectionMutex);

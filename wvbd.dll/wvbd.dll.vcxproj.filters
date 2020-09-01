@@ -18,12 +18,18 @@
     <ClCompile Include="wvbd_ioctl.c">
       <Filter>Source Files</Filter>
     </ClCompile>
-    <ClCompile Include="wvbd_lib.c">
+    <ClCompile Include="wvbd_wmi.cpp">
+      <Filter>Source Files</Filter>
+    </ClCompile>
+    <ClCompile Include="wvbd_lib.cpp">
       <Filter>Source Files</Filter>
     </ClCompile>
   </ItemGroup>
   <ItemGroup>
     <ClInclude Include="..\include\wvbd.h">
+      <Filter>Header Files</Filter>
+    </ClInclude>
+    <ClInclude Include="wvbd_wmi.h">
       <Filter>Header Files</Filter>
     </ClInclude>
   </ItemGroup>

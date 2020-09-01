@@ -6,6 +6,7 @@
 #include <scsi.h>
 
 #include "wvbd.h"
+#include "wvbd_wmi.h"
 
 #define STRING_OVERFLOWS(Str, MaxLen) (strlen(Str + 1) > MaxLen)
 
@@ -83,7 +84,7 @@ DWORD WvbdCreate(
     Device->Interface = Interface;
     Device->Properties = *Properties;
     Device->LogLevel = LogLevel;
-    Device->Handle = WvbdOpenDevice();
+    ErrorCode = WvbdOpenDevice(&Device->Handle);
 
     LogDebug(Device,
              "Mapping device. Name=%s, Serial=%s, Owner=%s, "
@@ -111,18 +112,18 @@ DWORD WvbdCreate(
              Properties->NbdProperties.SkipNegotiation);
     }
 
-    if (Device->Handle == INVALID_HANDLE_VALUE || !Device->Handle) {
-        ErrorCode = ERROR_OPEN_FAILED;
+    if (ErrorCode) {
         LogError(Device,
                  "Could not oped WVBD device. Please make sure "
-                 "that the driver is installed.");
+                 "that the driver is installed. Error: %d.", ErrorCode);
         goto Exit;
     }
 
     ErrorCode = WvbdIoctlCreate(
         Device->Handle, &Device->Properties, &Device->DiskHandle);
     if (ErrorCode) {
-        LogError(Device, "Could not map WVBD virtual disk.");
+        LogError(Device, "Could not map WVBD virtual disk. Error: %d.",
+                 ErrorCode);
         goto Exit;
     }
 
@@ -152,7 +153,8 @@ DWORD WvbdRemove(PWVBD_DEVICE Device)
 
     ErrorCode = WvbdIoctlRemove(Device->Handle, Device->Properties.InstanceName);
     if (ErrorCode && ErrorCode != ERROR_FILE_NOT_FOUND) {
-        LogError(Device, "Could not remove WVBD virtual disk. Error: %d.", ErrorCode);
+        LogError(Device, "Could not remove WVBD virtual disk. Error: %d.",
+                 ErrorCode);
     }
 
     return ErrorCode;
@@ -160,13 +162,13 @@ DWORD WvbdRemove(PWVBD_DEVICE Device)
 
 DWORD WvbdRemoveEx(const char* InstanceName)
 {
-    HANDLE Handle = WvbdOpenDevice();
-
-    if (Handle == INVALID_HANDLE_VALUE || !Handle) {
+    HANDLE Handle = INVALID_HANDLE_VALUE;
+    DWORD Status = WvbdOpenDevice(&Handle);
+    if (Status) {
         return ERROR_OPEN_FAILED;
     }
 
-    DWORD Status = WvbdIoctlRemove(Handle, InstanceName);
+    Status = WvbdIoctlRemove(Handle, InstanceName);
 
     CloseHandle(Handle);
     return Status;
@@ -174,13 +176,13 @@ DWORD WvbdRemoveEx(const char* InstanceName)
 
 DWORD WvbdList(PWVBD_CONNECTION_LIST* ConnectionList)
 {
-    HANDLE Handle = WvbdOpenDevice();
-
-    if (Handle == INVALID_HANDLE_VALUE || !Handle) {
+    HANDLE Handle = INVALID_HANDLE_VALUE;
+    DWORD Status = WvbdOpenDevice(&Handle);
+    if (Status) {
         return ERROR_OPEN_FAILED;
     }
 
-    DWORD Status = WvbdIoctlList(Handle, ConnectionList);
+    Status = WvbdIoctlList(Handle, ConnectionList);
 
     CloseHandle(Handle);
     return Status;
@@ -199,15 +201,16 @@ DWORD WvbdGetStats(PWVBD_DEVICE Device, PWVBD_STATS Stats, PULONG BufferSize)
 }
 
 
-DWORD WvbdGetDriverStats(const char* InstanceName, PWVBD_DRV_STATS Stats, PULONG BufferSize)
+DWORD WvbdGetDriverStats(const char* InstanceName, PWVBD_DRV_STATS Stats,
+                         PULONG BufferSize)
 {
-    HANDLE Handle = WvbdOpenDevice();
-
-    if (Handle == INVALID_HANDLE_VALUE || !Handle) {
+    HANDLE Handle = INVALID_HANDLE_VALUE;
+    DWORD Status = WvbdOpenDevice(&Handle);
+    if (Status) {
         return ERROR_OPEN_FAILED;
     }
 
-    DWORD Status = WvbdIoctlStats(Handle, InstanceName, Stats, BufferSize);
+    Status = WvbdIoctlStats(Handle, InstanceName, Stats, BufferSize);
 
     CloseHandle(Handle);
     return Status;
@@ -233,15 +236,15 @@ DWORD OpenRegistryKey(HKEY RootKey, LPCSTR KeyName, BOOLEAN Create, HKEY* OutKey
 
 DWORD WvbdRaiseLogLevel(USHORT LogLevel)
 {
-    HANDLE Handle = WvbdOpenDevice();
-
-    if (Handle == INVALID_HANDLE_VALUE || !Handle) {
+    HANDLE Handle = INVALID_HANDLE_VALUE;
+    DWORD Status = WvbdOpenDevice(&Handle);
+    if (Status) {
         return ERROR_OPEN_FAILED;
     }
 
     HKEY hKey = NULL;
-    DWORD Status = OpenRegistryKey(HKEY_LOCAL_MACHINE, WVBD_REGISTRY_KEY,
-                                   TRUE, &hKey);
+    Status = OpenRegistryKey(HKEY_LOCAL_MACHINE, WVBD_REGISTRY_KEY,
+                             TRUE, &hKey);
     if (Status)
         goto Exit;
 
@@ -297,7 +300,7 @@ DWORD WvbdStopDispatcher(PWVBD_DEVICE Device)
     DWORD Ret = 0;
 
     LogDebug(Device, "Stopping dispatcher.");
-    if (!InterlockedExchange8(&Device->Stopping, 1)) {
+    if (!InterlockedExchange8((CHAR*)&Device->Stopping, 1)) {
         Ret = WvbdRemove(Device);
     }
 
@@ -342,19 +345,19 @@ DWORD WvbdSendResponse(
         DataBuffer,
         DataBufferSize);
 
-    InterlockedIncrement64(&Device->Stats.TotalReceivedReplies);
-    InterlockedDecrement64(&Device->Stats.PendingSubmittedRequests);
+    InterlockedIncrement64((PLONG64)&Device->Stats.TotalReceivedReplies);
+    InterlockedDecrement64((PLONG64)&Device->Stats.PendingSubmittedRequests);
 
     if (Response->Status.ScsiStatus) {
         switch(Response->RequestType) {
             case WvbdReqTypeRead:
-                InterlockedIncrement64(&Device->Stats.ReadErrors);
+                InterlockedIncrement64((PLONG64)&Device->Stats.ReadErrors);
             case WvbdReqTypeWrite:
-                InterlockedIncrement64(&Device->Stats.WriteErrors);
+                InterlockedIncrement64((PLONG64)&Device->Stats.WriteErrors);
             case WvbdReqTypeFlush:
-                InterlockedIncrement64(&Device->Stats.FlushErrors);
+                InterlockedIncrement64((PLONG64)&Device->Stats.FlushErrors);
             case WvbdReqTypeUnmap:
-                InterlockedIncrement64(&Device->Stats.UnmapErrors);
+                InterlockedIncrement64((PLONG64)&Device->Stats.UnmapErrors);
         }
     }
 
@@ -377,8 +380,8 @@ VOID WvbdHandleRequest(PWVBD_DEVICE Device, PWVBD_IO_REQUEST Request,
     UINT8 AdditionalSenseCode = 0;
     BOOLEAN IsValid = TRUE;
 
-    InterlockedIncrement64(&Device->Stats.TotalReceivedRequests);
-    InterlockedIncrement64(&Device->Stats.UnsubmittedRequests);
+    InterlockedIncrement64((PLONG64)&Device->Stats.TotalReceivedRequests);
+    InterlockedIncrement64((PLONG64)&Device->Stats.UnsubmittedRequests);
 
     switch (Request->RequestType) {
         case WvbdReqTypeDisconnect:
@@ -400,8 +403,8 @@ VOID WvbdHandleRequest(PWVBD_DEVICE Device, PWVBD_IO_REQUEST Request,
                 Request->Cmd.Read.BlockCount,
                 Request->Cmd.Read.ForceUnitAccess);
 
-            InterlockedIncrement64(&Device->Stats.TotalRWRequests);
-            InterlockedAdd64(&Device->Stats.TotalReadBlocks,
+            InterlockedIncrement64((PLONG64)&Device->Stats.TotalRWRequests);
+            InterlockedAdd64((PLONG64)&Device->Stats.TotalReadBlocks,
                              Request->Cmd.Read.BlockCount);
             break;
         case WvbdReqTypeWrite:
@@ -419,8 +422,8 @@ VOID WvbdHandleRequest(PWVBD_DEVICE Device, PWVBD_IO_REQUEST Request,
                 Request->Cmd.Write.BlockCount,
                 Request->Cmd.Write.ForceUnitAccess);
 
-            InterlockedIncrement64(&Device->Stats.TotalRWRequests);
-            InterlockedAdd64(&Device->Stats.TotalWrittenBlocks,
+            InterlockedIncrement64((PLONG64)&Device->Stats.TotalRWRequests);
+            InterlockedAdd64((PLONG64)&Device->Stats.TotalWrittenBlocks,
                              Request->Cmd.Write.BlockCount);
             break;
         case WvbdReqTypeFlush:
@@ -432,7 +435,7 @@ VOID WvbdHandleRequest(PWVBD_DEVICE Device, PWVBD_IO_REQUEST Request,
                      Request->Cmd.Flush.BlockCount,
                      Request->RequestHandle);
             Device->Interface->Flush(
-                Device->Handle,
+                Device,
                 Request->RequestHandle,
                 Request->Cmd.Flush.BlockAddress,
                 Request->Cmd.Flush.BlockCount);
@@ -456,9 +459,9 @@ VOID WvbdHandleRequest(PWVBD_DEVICE Device, PWVBD_IO_REQUEST Request,
             LogDebug(Device, "Dispatching UNMAP # %llx.",
                      Request->RequestHandle);
             Device->Interface->Unmap(
-                Device->Handle,
+                Device,
                 Request->RequestHandle,
-                Buffer,
+                (PWVBD_UNMAP_DESCRIPTOR)Buffer,
                 Request->Cmd.Unmap.Count);
         default:
         Unsupported:
@@ -479,12 +482,12 @@ VOID WvbdHandleRequest(PWVBD_DEVICE Device, PWVBD_IO_REQUEST Request,
             break;
     }
 
-    InterlockedDecrement64(&Device->Stats.UnsubmittedRequests);
+    InterlockedDecrement64((PLONG64)&Device->Stats.UnsubmittedRequests);
     if (IsValid) {
-        InterlockedIncrement64(&Device->Stats.TotalSubmittedRequests);
-        InterlockedIncrement64(&Device->Stats.PendingSubmittedRequests);
+        InterlockedIncrement64((PLONG64)&Device->Stats.TotalSubmittedRequests);
+        InterlockedIncrement64((PLONG64)&Device->Stats.PendingSubmittedRequests);
     } else {
-        InterlockedIncrement64(&Device->Stats.InvalidRequests);
+        InterlockedIncrement64((PLONG64)&Device->Stats.InvalidRequests);
     }
 }
 
@@ -494,10 +497,6 @@ DWORD WvbdDispatcherLoop(PWVBD_DEVICE Device)
     WVBD_IO_REQUEST Request;
     PVOID Buffer = malloc(Device->Properties.MaxTransferLength);
 
-    // gruesome hack to give storport enough time to identify our device.
-    // TODO: find a better way of handling pending disks.
-    Sleep(5000);
-
     while (WvbdIsRunning(Device)) {
         ErrorCode = WvbdIoctlFetchRequest(
             Device->Handle,
@@ -506,7 +505,8 @@ DWORD WvbdDispatcherLoop(PWVBD_DEVICE Device)
             Buffer,
             Device->Properties.MaxTransferLength);
         if (ErrorCode) {
-            LogWarning(Device, "Could not fetch request: %d", ErrorCode);
+            LogWarning(Device, "Could not fetch request. Error: %d",
+                       ErrorCode);
             break;
         }
         WvbdHandleRequest(Device, &Request, Buffer);
@@ -540,7 +540,8 @@ DWORD WvbdStartDispatcher(PWVBD_DEVICE Device, DWORD ThreadCount)
 
     for (DWORD i = 0; i < ThreadCount; i++)
     {
-        HANDLE Thread = CreateThread(0, 0, WvbdDispatcherLoop, Device, 0, 0);
+        HANDLE Thread = CreateThread(
+            0, 0, (LPTHREAD_START_ROUTINE )WvbdDispatcherLoop, Device, 0, 0);
         if (!Thread)
         {
             LogError(Device, "Could not start dispatcher thread.");
@@ -578,10 +579,21 @@ DWORD WvbdWaitDispatcher(PWVBD_DEVICE Device)
 
     if (Ret == WAIT_FAILED) {
         DWORD Err = GetLastError();
-        LogError(Device, "Failed waiting for the dispatcher. Error: %d", Err);
+        LogError(Device, "Failed waiting for the dispatcher. Error: %d.", Err);
         return Err;
     }
 
     LogDebug(Device, "The dispatcher stopped.");
     return 0;
+}
+
+HRESULT WvbdGetDiskNumberBySerialNumber(
+    LPCWSTR SerialNumber,
+    PDWORD DiskNumber)
+{
+    return GetDiskNumberBySerialNumber(SerialNumber, DiskNumber);
+}
+
+HRESULT WvbdCoInitializeBasic() {
+    return CoInitializeBasic();
 }

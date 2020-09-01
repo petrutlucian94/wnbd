@@ -22,31 +22,33 @@ extern "C" {
 #include <process.h>
 
 /* WNBD Defines */
-#include <userspace_shared.h>
+#include "userspace_shared.h"
+#include "wvbd.h"
 
-INT
-Syntax(void);
-
-DWORD
-WnbdUnmap(PCHAR instanceName);
+void
+PrintSyntax();
 
 DWORD
-WnbdStats(PCHAR instanceName);
+CmdUnmap(PCHAR InstanceName);
 
 DWORD
-WnbdMap(PCHAR InstanceName,
-        PCHAR HostName,
-        PCHAR PortName,
-        PCHAR ExportName,
-        UINT64 DiskSize,
-        BOOLEAN MustNegotiate,
-        BOOLEAN ReadOnly);
+CmdStats(PCHAR InstanceName);
 
 DWORD
-WnbdList(PDISK_INFO_LIST* Output);
+CmdMap(
+    PCHAR InstanceName,
+    PCHAR HostName,
+    PCHAR PortName,
+    PCHAR ExportName,
+    UINT64 DiskSize,
+    BOOLEAN MustNegotiate,
+    BOOLEAN ReadOnly);
 
 DWORD
-WnbdSetDebug(UINT32 LogLevel);
+CmdList();
+
+DWORD
+CmdRaiseLogLevel(UINT32 LogLevel);
 
 #ifdef __cplusplus
 }

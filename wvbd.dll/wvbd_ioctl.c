@@ -13,7 +13,7 @@
 #define STRING_OVERFLOWS(Str, MaxLen) (strlen(Str + 1) > MaxLen)
 
 
-HANDLE WvbdOpenDevice()
+DWORD WvbdOpenDevice(PHANDLE Handle)
 {
     HDEVINFO DevInfo = { 0 };
     SP_DEVICE_INTERFACE_DATA DevInterfaceData = { 0 };
@@ -83,7 +83,10 @@ Exit:
         SetupDiDestroyDeviceInfoList(DevInfo);
     }
 
-    return WnbdDriverHandle;
+    if (!ErrorCode)
+        *Handle = WnbdDriverHandle;
+
+    return ErrorCode;
 }
 
 DWORD WvbdIoctlCreate(HANDLE Device, PWVBD_PROPERTIES Properties,
@@ -95,18 +98,16 @@ DWORD WvbdIoctlCreate(HANDLE Device, PWVBD_PROPERTIES Properties,
         return ERROR_BUFFER_OVERFLOW;
     }
 
-    BOOL DevStatus = 0;
     DWORD BytesReturned = 0;
     WVBD_IOCTL_CREATE_COMMAND Command = { 0 };
 
     Command.IoControlCode = IOCTL_WVBD_CREATE;
     memcpy(&Command.Properties, Properties, sizeof(WVBD_PROPERTIES));
 
-    DevStatus = DeviceIoControl(
+    BOOL DevStatus = DeviceIoControl(
         Device, IOCTL_MINIPORT_PROCESS_SERVICE_IRP,
         &Command, sizeof(Command), &DiskHandle, sizeof(WVBD_DISK_HANDLE),
         &BytesReturned, NULL);
-
     if (!DevStatus) {
         ErrorCode = GetLastError();
     }
@@ -126,17 +127,15 @@ DWORD WvbdIoctlRemove(HANDLE Device, const char* InstanceName)
     if (!InstanceName)
         return ERROR_INVALID_PARAMETER;
 
-    BOOL DevStatus = 0;
     DWORD BytesReturned = 0;
     WVBD_IOCTL_REMOVE_COMMAND Command = { 0 };
 
     Command.IoControlCode = IOCTL_WVBD_REMOVE;
     memcpy(Command.InstanceName, InstanceName, strlen(InstanceName));
 
-    DevStatus = DeviceIoControl(
+    BOOL DevStatus = DeviceIoControl(
         Device, IOCTL_MINIPORT_PROCESS_SERVICE_IRP,
         &Command, sizeof(Command), NULL, 0, &BytesReturned, NULL);
-
     if (!DevStatus) {
         Status = GetLastError();
     }
@@ -153,7 +152,6 @@ DWORD WvbdIoctlFetchRequest(
 {
     DWORD Status = ERROR_SUCCESS;
 
-    BOOL DevStatus = 0;
     DWORD BytesReturned = 0;
     WVBD_IOCTL_FETCH_REQ_COMMAND Command = { 0 };
 
@@ -162,12 +160,11 @@ DWORD WvbdIoctlFetchRequest(
     Command.DataBuffer = DataBuffer;
     Command.DataBufferSize = DataBufferSize;
 
-    DevStatus = DeviceIoControl(
+    BOOL DevStatus = DeviceIoControl(
         Device, IOCTL_MINIPORT_PROCESS_SERVICE_IRP,
         &Command, sizeof(WVBD_IOCTL_FETCH_REQ_COMMAND),
         &Command, sizeof(WVBD_IOCTL_FETCH_REQ_COMMAND),
         &BytesReturned, NULL);
-
     if (!DevStatus) {
         Status = GetLastError();
     }
@@ -187,7 +184,6 @@ DWORD WvbdIoctlSendResponse(
 {
     DWORD Status = ERROR_SUCCESS;
 
-    BOOL DevStatus = 0;
     DWORD BytesReturned = 0;
     WVBD_IOCTL_SEND_RSP_COMMAND Command = { 0 };
 
@@ -197,7 +193,7 @@ DWORD WvbdIoctlSendResponse(
     Command.DataBufferSize = DataBufferSize;
     memcpy(&Command.Response, Response, sizeof(WVBD_IO_RESPONSE));
 
-    DevStatus = DeviceIoControl(
+    BOOL DevStatus = DeviceIoControl(
         Device, IOCTL_MINIPORT_PROCESS_SERVICE_IRP,
         &Command, sizeof(WVBD_IOCTL_SEND_RSP_COMMAND),
         NULL, 0, &BytesReturned, NULL);
@@ -237,7 +233,8 @@ DWORD WvbdIoctlList(HANDLE Device, PWVBD_CONNECTION_LIST* ConnectionList)
         goto Exit;
     }
 
-    if (((PWVBD_CONNECTION_LIST)Buffer)->ElementSize != sizeof(WVBD_CONNECTION_INFO)) {
+    if (((PWVBD_CONNECTION_LIST)Buffer)->ElementSize !=
+            sizeof(WVBD_CONNECTION_INFO)) {
         // Possible version mismatch
         Status = ERROR_BAD_LENGTH;
     }
@@ -259,20 +256,14 @@ DWORD WvbdIoctlStats(HANDLE Device, const char* InstanceName,
 {
     DWORD Status = ERROR_SUCCESS;
 
-    if (*BufferSize < sizeof(WVBD_DRV_STATS)) {
-        return ERROR_INSUFFICIENT_BUFFER;
-    }
-
-    BOOL DevStatus = 0;
-    DWORD BytesReturned = 0;
-
     WVBD_IOCTL_STATS_COMMAND Command;
     Command.IoControlCode = IOCTL_WVBD_STATS;
     memcpy(Command.InstanceName, InstanceName, strlen(InstanceName));
 
-    DevStatus = DeviceIoControl(
+    BOOL DevStatus = DeviceIoControl(
         Device, IOCTL_MINIPORT_PROCESS_SERVICE_IRP,
-        &Command, sizeof(Command), &Stats, sizeof(Stats), BufferSize, NULL);
+        &Command, sizeof(Command),
+        Stats, *BufferSize, BufferSize, NULL);
 
     if (!DevStatus) {
         Status = GetLastError();
@@ -283,11 +274,10 @@ DWORD WvbdIoctlStats(HANDLE Device, const char* InstanceName,
 
 DWORD WvbdIoctlReloadConfig(HANDLE Device)
 {
-    BOOL DevStatus = 0;
     DWORD BytesReturned = 0;
     WVBD_IOCTL_RELOAD_CONFIG_COMMAND Command = { IOCTL_WVBD_RELOAD_CONFIG };
 
-    DevStatus = DeviceIoControl(
+    BOOL DevStatus = DeviceIoControl(
         Device, IOCTL_MINIPORT_PROCESS_SERVICE_IRP,
         &Command, sizeof(Command), NULL, 0, &BytesReturned, NULL);
     if (!DevStatus) {
@@ -299,11 +289,10 @@ DWORD WvbdIoctlReloadConfig(HANDLE Device)
 
 DWORD WvbdIoctlPing(HANDLE Device)
 {
-    BOOL DevStatus = 0;
     DWORD BytesReturned = 0;
     WVBD_IOCTL_PING_COMMAND Command = { IOCTL_WVBD_PING };
 
-    DevStatus = DeviceIoControl(
+    BOOL DevStatus = DeviceIoControl(
         Device, IOCTL_MINIPORT_PROCESS_SERVICE_IRP,
         &Command, sizeof(Command), NULL, 0, &BytesReturned, NULL);
     if (!DevStatus) {

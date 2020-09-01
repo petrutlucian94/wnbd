@@ -104,6 +104,10 @@ __pragma(pack(pop))
 #define NbdMalloc(S) ExAllocatePoolWithTag(NonPagedPoolNx, S, RBD_PROTOCOL_TAG)
 #define NbdFree(S) ExFreePool(S)
 
+#ifdef __cplusplus
+extern "C" {
+#endif
+
 VOID
 NbdRequest(_In_ INT Fd,
             _In_ UINT64 Offset,
@@ -149,5 +153,9 @@ RbdReadExact(_In_ INT Fd,
              _Inout_ PNTSTATUS error);
 
 char* NbdRequestTypeStr(NbdRequestType RequestType);
+
+#ifdef __cplusplus
+}
+#endif
 
 #endif

@@ -20,10 +20,12 @@
   </ItemGroup>
   <ItemGroup>
     <ClCompile Include="wvbd_ioctl.c" />
-    <ClCompile Include="wvbd_lib.c" />
+    <ClCompile Include="wvbd_lib.cpp" />
+    <ClCompile Include="wvbd_wmi.cpp" />
   </ItemGroup>
   <ItemGroup>
     <ClInclude Include="..\include\wvbd.h" />
+    <ClInclude Include="wvbd_wmi.h" />
   </ItemGroup>
   <PropertyGroup Label="Globals">
     <VCProjectVersion>16.0</VCProjectVersion>

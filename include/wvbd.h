@@ -137,7 +137,7 @@ DWORD WvbdSendResponse(
     PVOID DataBuffer,
     UINT32 DataBufferSize);
 
-HANDLE WvbdOpenDevice();
+DWORD WvbdOpenDevice(PHANDLE Handle);
 DWORD WvbdIoctlPing(HANDLE Device);
 
 DWORD WvbdIoctlCreate(
@@ -169,6 +169,12 @@ DWORD WvbdIoctlSendResponse(
     PWVBD_IO_RESPONSE Response,
     PVOID DataBuffer,
     UINT32 DataBufferSize);
+
+HRESULT WvbdCoInitializeBasic();
+// Requires COM. For convenience, WvbdCoInitializeBasic may be used.
+HRESULT WvbdGetDiskNumberBySerialNumber(
+    LPCWSTR SerialNumber,
+    PDWORD DiskNumber);
 
 static inline const CHAR* WvbdLogLevelToStr(WvbdLogLevel LogLevel) {
     switch(LogLevel)

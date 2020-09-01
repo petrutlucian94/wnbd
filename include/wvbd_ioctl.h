@@ -109,8 +109,8 @@ typedef struct
 
 typedef struct
 {
-    UINT32 Count;
     UINT32 ElementSize;
+    UINT32 Count;
     WVBD_CONNECTION_INFO Connections[1];
 } WVBD_CONNECTION_LIST, *PWVBD_CONNECTION_LIST;
 

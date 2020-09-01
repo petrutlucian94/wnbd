@@ -40,6 +40,7 @@ typedef struct _USER_ENTRY {
     UINT16                             BlockSize;
     UINT16                             NbdFlags;
     CONNECTION_INFO                    UserInformation;
+    UINT64                             DiskHandle;
 } USER_ENTRY, *PUSER_ENTRY;
 
 typedef struct _SCSI_DEVICE_INFORMATION
@@ -87,6 +88,10 @@ BOOLEAN
 WnbdFindConnection(_In_ PGLOBAL_INFORMATION GInfo,
                    _In_ PCHAR InstanceName,
                    _Maybenull_ PUSER_ENTRY* Entry);
+
+PUSER_ENTRY
+WnbdFindConnectionEx(_In_ PGLOBAL_INFORMATION GInfo,
+                     _In_ UINT64 DiskHandle);
 
 NTSTATUS
 WnbdCreateConnection(_In_ PGLOBAL_INFORMATION GInfo,

@@ -3,18 +3,17 @@ EXPORTS
     WvbdRemove
     WvbdRemoveEx
     WvbdClose
-
     WvbdList
     WvbdGetStats
     WvbdGetDriverStats
     WvbdRaiseLogLevel
-
     WvbdSetSenseEx
     WvbdSetSense
-
     WvbdStartDispatcher
     WvbdWaitDispatcher
     WvbdSendResponse
+    WvbdCoInitializeBasic
+    WvbdGetDiskNumberBySerialNumber
 
     WvbdOpenDevice
     WvbdIoctlPing

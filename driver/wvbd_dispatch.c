@@ -71,7 +71,7 @@ NTSTATUS LockUsermodeBuffer(PIRP Irp, PVOID Buffer, UINT32 BufferSize, BOOLEAN W
 
 NTSTATUS WvbdDispatchRequest(
     PIRP Irp,
-    PWNBD_SCSI_DEVICE Device,
+    PSCSI_DEVICE_INFORMATION DeviceInfo,
     PWVBD_IOCTL_FETCH_REQ_COMMAND Command)
 {
     PVOID Buffer;
@@ -83,24 +83,21 @@ NTSTATUS WvbdDispatchRequest(
     if (Status)
         return Status;
 
-    PSCSI_DEVICE_INFORMATION DeviceInformation =
-        (PSCSI_DEVICE_INFORMATION) Device->ScsiDeviceExtension;
-
     static UINT64 RequestHandle = 0;
 
     // We're looping through the requests until we manage to dispatch one.
     // Unsupported requests as well as most errors will be hidden from the caller.
-    while (!DeviceInformation->HardTerminateDevice) {
+    while (!DeviceInfo->HardTerminateDevice) {
         PVOID WaitObjects[2];
-        WaitObjects[0] = &DeviceInformation->DeviceEvent;
-        WaitObjects[1] = &DeviceInformation->TerminateEvent;
+        WaitObjects[0] = &DeviceInfo->DeviceEvent;
+        WaitObjects[1] = &DeviceInfo->TerminateEvent;
         KeWaitForMultipleObjects(2, WaitObjects, WaitAny, Executive, KernelMode,
                                  FALSE, NULL, NULL);
         PLIST_ENTRY RequestEntry = ExInterlockedRemoveHeadList(
-            &DeviceInformation->RequestListHead,
-            &DeviceInformation->RequestListLock);
+            &DeviceInfo->RequestListHead,
+            &DeviceInfo->RequestListLock);
 
-        if (DeviceInformation->HardTerminateDevice) {
+        if (DeviceInfo->HardTerminateDevice) {
             break;
         }
         if (!RequestEntry) {
@@ -132,22 +129,22 @@ NTSTATUS WvbdDispatchRequest(
                                  Element->DeviceExtension,
                                  Element->Srb);
             ExFreePool(Element);
-            InterlockedDecrement64(&DeviceInformation->Stats.UnsubmittedIORequests);
+            InterlockedDecrement64(&DeviceInfo->Stats.UnsubmittedIORequests);
             continue;
         }
 
         switch(RequestType) {
         case WvbdReqTypeRead:
             Request->Cmd.Read.BlockAddress =
-                Element->StartingLbn / DeviceInformation->UserEntry->BlockSize;;
+                Element->StartingLbn / DeviceInfo->UserEntry->BlockSize;;
             Request->Cmd.Read.BlockCount =
-                Element->ReadLength / DeviceInformation->UserEntry->BlockSize;
+                Element->ReadLength / DeviceInfo->UserEntry->BlockSize;
             break;
         case WvbdReqTypeWrite:
             Request->Cmd.Write.BlockAddress =
-                Element->StartingLbn / DeviceInformation->UserEntry->BlockSize;
+                Element->StartingLbn / DeviceInfo->UserEntry->BlockSize;
             Request->Cmd.Write.BlockCount =
-                Element->ReadLength / DeviceInformation->UserEntry->BlockSize;
+                Element->ReadLength / DeviceInfo->UserEntry->BlockSize;
             if (Element->ReadLength > Command->DataBufferSize) {
                 // TODO: insert the request back in the queue and remove it
                 // from the reply list. The semaphore should also be incremented.
@@ -164,7 +161,7 @@ NTSTATUS WvbdDispatchRequest(
                     Element->DeviceExtension,
                     Element->Srb);
                 ExFreePool(Element);
-                InterlockedDecrement64(&DeviceInformation->Stats.UnsubmittedIORequests);
+                InterlockedDecrement64(&DeviceInfo->Stats.UnsubmittedIORequests);
                 continue;
             }
 
@@ -173,16 +170,16 @@ NTSTATUS WvbdDispatchRequest(
         }
 
         ExInterlockedInsertTailList(
-            &DeviceInformation->ReplyListHead,
-            &Element->Link, &DeviceInformation->ReplyListLock);
-        InterlockedIncrement64(&DeviceInformation->Stats.PendingSubmittedIORequests);
-        InterlockedDecrement64(&DeviceInformation->Stats.UnsubmittedIORequests);
+            &DeviceInfo->ReplyListHead,
+            &Element->Link, &DeviceInfo->ReplyListLock);
+        InterlockedIncrement64(&DeviceInfo->Stats.PendingSubmittedIORequests);
+        InterlockedDecrement64(&DeviceInfo->Stats.UnsubmittedIORequests);
         // We managed to find a supported request, we can now exit the loop
         // and pass it forward.
         break;
     }
 
-    if (DeviceInformation->HardTerminateDevice) {
+    if (DeviceInfo->HardTerminateDevice) {
         Request->RequestType = WvbdReqTypeDisconnect;
         Status = 0;
     }
@@ -192,7 +189,7 @@ NTSTATUS WvbdDispatchRequest(
 
 NTSTATUS WvbdHandleResponse(
     PIRP Irp,
-    PWNBD_SCSI_DEVICE Device,
+    PSCSI_DEVICE_INFORMATION DeviceInfo,
     PWVBD_IOCTL_SEND_RSP_COMMAND Command)
 {
     PSRB_QUEUE_ELEMENT Element = NULL;
@@ -200,13 +197,11 @@ NTSTATUS WvbdHandleResponse(
     PVOID SrbBuff = NULL, LockedUserBuff = NULL;
 
     PWVBD_IO_RESPONSE Response = &Command->Response;
-    PSCSI_DEVICE_INFORMATION DeviceInformation =
-        (PSCSI_DEVICE_INFORMATION) Device->ScsiDeviceExtension;
 
     PLIST_ENTRY ItemLink, ItemNext;
     KIRQL Irql = { 0 };
-    KeAcquireSpinLock(&DeviceInformation->ReplyListLock, &Irql);
-    LIST_FORALL_SAFE(&DeviceInformation->ReplyListHead, ItemLink, ItemNext) {
+    KeAcquireSpinLock(&DeviceInfo->ReplyListLock, &Irql);
+    LIST_FORALL_SAFE(&DeviceInfo->ReplyListHead, ItemLink, ItemNext) {
         Element = CONTAINING_RECORD(ItemLink, SRB_QUEUE_ELEMENT, Link);
         if (Element->Tag == Response->RequestHandle) {
             RemoveEntryList(&Element->Link);
@@ -214,7 +209,7 @@ NTSTATUS WvbdHandleResponse(
         }
         Element = NULL;
     }
-    KeReleaseSpinLock(&DeviceInformation->ReplyListLock, Irql);
+    KeReleaseSpinLock(&DeviceInfo->ReplyListLock, Irql);
     if (!Element) {
         WNBD_LOG_ERROR("Received reply with no matching request tag: 0x%llx",
             Response->RequestHandle);
@@ -266,13 +261,13 @@ NTSTATUS WvbdHandleResponse(
         Element->Srb->SrbStatus = SRB_STATUS_SUCCESS;
     }
 
-    InterlockedIncrement64(&DeviceInformation->Stats.TotalReceivedIOReplies);
-    InterlockedDecrement64(&DeviceInformation->Stats.PendingSubmittedIORequests);
+    InterlockedIncrement64(&DeviceInfo->Stats.TotalReceivedIOReplies);
+    InterlockedDecrement64(&DeviceInfo->Stats.PendingSubmittedIORequests);
     // TODO: consider dropping this counter, relying on the request list instead.
-    InterlockedDecrement(&DeviceInformation->Device->OutstandingIoCount);
+    InterlockedDecrement(&DeviceInfo->Device->OutstandingIoCount);
 
     if (Element->Aborted) {
-        InterlockedIncrement64(&DeviceInformation->Stats.CompletedAbortedIORequests);
+        InterlockedIncrement64(&DeviceInfo->Stats.CompletedAbortedIORequests);
     }
 
 Exit:
