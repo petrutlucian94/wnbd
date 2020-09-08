@@ -327,7 +327,7 @@ RbdNegotiate(_In_ INT* Pfd,
 _Use_decl_annotations_
 INT
 NbdOpenAndConnect(PCHAR HostName,
-                  PCHAR PortName)
+                  DWORD PortNumber)
 {
     WNBD_LOG_LOUD(": Enter");
     INT Fd = -1;
@@ -341,7 +341,14 @@ NbdOpenAndConnect(PCHAR HostName,
     Hints.ai_flags = AI_ADDRCONFIG | AI_NUMERICSERV;
     Hints.ai_protocol = IPPROTO_TCP;
 
-    Error = GetAddrInfo(HostName, PortName, &Hints, &Ai);
+    char* PortName[12] = { 0 };
+    Error = _snprintf((char*)PortName, sizeof(PortName), "%d", PortNumber);
+    if (Error) {
+        WNBD_LOG_ERROR("Could not convert port number. Error: %d", Error);
+        return -1;
+    }
+
+    Error = GetAddrInfo(HostName, (char*)PortName, &Hints, &Ai);
 
     if (0 != Error) {
         if (Ai) {
