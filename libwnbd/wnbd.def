@@ -1,0 +1,28 @@
+LIBRARY wnbd
+
+EXPORTS
+    WnbdCreate
+    WnbdRemove
+    WnbdRemoveEx
+    WnbdClose
+    WnbdList
+    WnbdGetUserspaceStats
+    WnbdGetDriverStats
+    WnbdRaiseLogLevel
+    WnbdSetSenseEx
+    WnbdSetSense
+    WnbdStartDispatcher
+    WnbdWaitDispatcher
+    WnbdSendResponse
+    WnbdCoInitializeBasic
+    WnbdGetDiskNumberBySerialNumber
+
+    WnbdOpenDevice
+    WnbdIoctlPing
+    WnbdIoctlCreate
+    WnbdIoctlRemove
+    WnbdIoctlList
+    WnbdIoctlStats
+    WnbdIoctlReloadConfig
+    WnbdIoctlFetchRequest
+    WnbdIoctlSendResponse
