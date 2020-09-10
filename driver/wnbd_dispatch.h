@@ -6,7 +6,7 @@
 
 // TODO: consider moving this to util.h
 NTSTATUS LockUsermodeBuffer(
-    PVOID Buffer, UINT32 BufferSize, BOOLEAN Writeable,
+    PIRP Irp, PVOID Buffer, UINT32 BufferSize, BOOLEAN Writeable,
     PVOID* OutBuffer, PMDL* OutMdl, BOOLEAN* Locked);
 
 NTSTATUS WnbdDispatchRequest(

@@ -32,7 +32,7 @@ ScsiOpToWnbdReqType(int ScsiOp)
 }
 
 NTSTATUS LockUsermodeBuffer(
-    PVOID Buffer, UINT32 BufferSize, BOOLEAN Writeable,
+    PIRP Irp, PVOID Buffer, UINT32 BufferSize, BOOLEAN Writeable,
     PVOID* OutBuffer, PMDL* OutMdl, BOOLEAN* Locked)
 {
     NTSTATUS Status = 0;
@@ -46,9 +46,9 @@ NTSTATUS LockUsermodeBuffer(
         PMDL Mdl = IoAllocateMdl(
             Buffer,
             BufferSize,
+            0 != Irp->MdlAddress,
             FALSE,
-            FALSE,
-            NULL);
+            Irp);
         if (!Mdl)
         {
             WNBD_LOG_ERROR("Could not allocate MDL. Buffer: %p, size: %d.",
@@ -105,7 +105,7 @@ NTSTATUS WnbdDispatchRequest(
     }
 
     Status = LockUsermodeBuffer(
-        Command->DataBuffer, Command->DataBufferSize, TRUE,
+        Irp, Command->DataBuffer, Command->DataBufferSize, TRUE,
         &Buffer, &Mdl, &BufferLocked);
     if (Status)
         goto Exit;
@@ -221,12 +221,12 @@ NTSTATUS WnbdDispatchRequest(
     }
 
 Exit:
-    if (Mdl) {
-        if (BufferLocked) {
-            MmUnlockPages(Mdl);
-        }
-        IoFreeMdl(Mdl);
-    }
+    // if (Mdl) {
+    //     if (BufferLocked) {
+    //         MmUnlockPages(Mdl);
+    //     }
+    //     IoFreeMdl(Mdl);
+    // }
 
     if (DeviceInfo->HardTerminateDevice) {
         Request->RequestType = WnbdReqTypeDisconnect;
@@ -302,7 +302,7 @@ NTSTATUS WnbdHandleResponse(
 
     if (!Response->Status.ScsiStatus && IsReadSrb(Element->Srb)) {
         Status = LockUsermodeBuffer(
-            Command->DataBuffer, Command->DataBufferSize, FALSE,
+            Irp, Command->DataBuffer, Command->DataBufferSize, FALSE,
             &LockedUserBuff, &Mdl, &BufferLocked);
         if (Status)
             goto Exit;
@@ -332,12 +332,12 @@ NTSTATUS WnbdHandleResponse(
     }
 
 Exit:
-    if (Mdl) {
-        if (BufferLocked) {
-            MmUnlockPages(Mdl);
-        }
-        IoFreeMdl(Mdl);
-    }
+    // if (Mdl) {
+    //     if (BufferLocked) {
+    //         MmUnlockPages(Mdl);
+    //     }
+    //     IoFreeMdl(Mdl);
+    // }
 
     if (Element) {
         if (!Element->Aborted) {
