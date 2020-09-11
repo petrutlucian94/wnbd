@@ -689,9 +689,14 @@ NTSTATUS
 WnbdParseUserIOCTL(PVOID GlobalHandle,
                    PIRP Irp)
 {
+    LARGE_INTEGER DeltaMs, StartT, EndT;
+    ULONG TickIncrement = KeQueryTimeIncrement();
+    KeQueryTickCount(&StartT);
+
     WNBD_LOG_LOUD(": Enter");
     ASSERT(Irp);
     ASSERT(GlobalHandle);
+
     PIO_STACK_LOCATION IoLocation = IoGetCurrentIrpStackLocation(Irp);
     NTSTATUS Status = STATUS_SUCCESS;
     PGLOBAL_INFORMATION	GInfo = (PGLOBAL_INFORMATION) GlobalHandle;
@@ -712,6 +717,12 @@ WnbdParseUserIOCTL(PVOID GlobalHandle,
     if (NULL == Cmd || CHECK_I_LOCATION(IoLocation, WNBD_IOCTL_BASE_COMMAND)) {
         WNBD_LOG_ERROR("Missing IOCTL command.");
         return STATUS_INVALID_PARAMETER;
+    }
+
+    KeQueryTickCount(&EndT);
+    DeltaMs.QuadPart = (EndT.QuadPart - StartT.QuadPart) * TickIncrement / 10000;
+    if (DeltaMs.QuadPart > 5000) {
+        WNBD_LOG_ERROR("Duration (ms): %llu", DeltaMs.QuadPart);
     }
 
     switch (Cmd->IoControlCode) {
@@ -962,6 +973,8 @@ WnbdParseUserIOCTL(PVOID GlobalHandle,
 
     case IOCTL_WNBD_SEND_RSP:
         WNBD_LOG_LOUD("IOCTL_WNBD_SEND_RSP");
+        KeQueryTickCount(&StartT);
+
         PWNBD_IOCTL_SEND_RSP_COMMAND RspCmd =
             (PWNBD_IOCTL_SEND_RSP_COMMAND) Irp->AssociatedIrp.SystemBuffer;
         if (!RspCmd || CHECK_I_LOCATION(IoLocation, PWNBD_IOCTL_FETCH_REQ_COMMAND)) {
@@ -992,11 +1005,20 @@ WnbdParseUserIOCTL(PVOID GlobalHandle,
             break;
         }
 
+        InterlockedIncrement64(&Device->ScsiInformation->Stats.PendingReplies);
         Status = WnbdHandleResponse(Irp, Device->ScsiInformation, RspCmd);
+        InterlockedDecrement64(&Device->ScsiInformation->Stats.PendingReplies);
         WNBD_LOG_LOUD("Reply handling status: %d.", Status);
 
         KeEnterCriticalRegion();
         ExReleaseRundownProtection(&Device->ScsiInformation->RundownProtection);
+
+        KeQueryTickCount(&EndT);
+        DeltaMs.QuadPart = (EndT.QuadPart - StartT.QuadPart) * TickIncrement / 10000;
+        if (DeltaMs.QuadPart > 5000) {
+            WNBD_LOG_ERROR("Duration (ms): %llu", DeltaMs.QuadPart);
+        }
+
         KeLeaveCriticalRegion();
         break;
 

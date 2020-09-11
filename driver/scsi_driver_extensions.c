@@ -12,6 +12,7 @@
 #include "scsi_function.h"
 #include "scsi_trace.h"
 #include "util.h"
+#include "wnbd_ioctl.h"
 #include "userspace.h"
 
 VOID
@@ -244,6 +245,8 @@ VOID
 WnbdHwProcessServiceRequest(PVOID DeviceExtension,
                             PVOID Irp)
 {
+    LARGE_INTEGER DeltaMs, StartT, EndT;
+    ULONG TickIncrement = KeQueryTimeIncrement();
     WNBD_LOG_LOUD(": Enter");
     ASSERT(DeviceExtension);
     ASSERT(Irp);
@@ -253,16 +256,41 @@ WnbdHwProcessServiceRequest(PVOID DeviceExtension,
     PWNBD_EXTENSION	Ext = (PWNBD_EXTENSION) DeviceExtension;
 
     if (IRP_MJ_DEVICE_CONTROL == IoLocation->MajorFunction) {
+        KeQueryTickCount(&StartT);
         Status = WnbdParseUserIOCTL(Ext->GlobalInformation, (PIRP)Irp);
+        KeQueryTickCount(&EndT);
+        DeltaMs.QuadPart = (EndT.QuadPart - StartT.QuadPart) * TickIncrement / 10000;
+        DWORD Code = 0;
+        if (DeltaMs.QuadPart > 5000) {
+            DWORD Ioctl = IoLocation->Parameters.DeviceIoControl.IoControlCode;
+            PIRP PIRPz = (PIRP)Irp;
+            if (IOCTL_MINIPORT_PROCESS_SERVICE_IRP == Ioctl) {
+                PWNBD_IOCTL_BASE_COMMAND Cmd = (
+                    PWNBD_IOCTL_BASE_COMMAND) PIRPz->AssociatedIrp.SystemBuffer;
+                if (NULL != Cmd && IoLocation->Parameters.DeviceIoControl.InputBufferLength 
+                        >= sizeof(WNBD_IOCTL_BASE_COMMAND)) {
+                    Code = Cmd->IoControlCode;
+                }
+            }
+
+            WNBD_LOG_ERROR("Duration (ms): %llu. Cmd: %d", DeltaMs.QuadPart, Code);
+        }
     }
 
     if (STATUS_PENDING != Status) {
         ((PIRP)Irp)->IoStatus.Status = Status;
         WNBD_LOG_LOUD("Calling StorPortCompleteServiceIrp");
+        KeQueryTickCount(&StartT);
         StorPortCompleteServiceIrp(DeviceExtension, Irp);
+        KeQueryTickCount(&EndT);
+        DeltaMs.QuadPart = (EndT.QuadPart - StartT.QuadPart) * TickIncrement / 10000;
+        if (DeltaMs.QuadPart > 5000) {
+            WNBD_LOG_ERROR("Duration (ms): %llu", DeltaMs.QuadPart);
+        }
     } else {
         WNBD_LOG_LOUD("Pending HwProcessServiceRequest");
     }
+
     WNBD_LOG_LOUD(": Exit");
 }
 
