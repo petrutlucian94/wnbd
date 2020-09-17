@@ -498,18 +498,20 @@ WnbdSetDeviceMissing(PVOID Handle,
                      BOOLEAN Force)
 {
     WNBD_LOG_LOUD(": Enter");
+    // TODO: no need for void pointer.
     PWNBD_SCSI_DEVICE Device = (PWNBD_SCSI_DEVICE)Handle;
     
     if (Device == NULL) {
         return TRUE;
     }
 
-    if (Device->OutstandingIoCount && !Force) {
+    if (WNBD_DEV_INFO(Device)->Stats.OutstandingIOCount && !Force) {
         return FALSE;
     }
     
-    ASSERT(!Device->OutstandingIoCount);
-    WNBD_LOG_INFO("Disconnecting with, OutstandingIoCount: %d", Device->OutstandingIoCount);
+    ASSERT(!&WNBD_DEV_INFO(Device)->Stats.OutstandingIOCount);
+    WNBD_LOG_INFO("Disconnecting with, OutstandingIOCount: %d",
+                  &WNBD_DEV_INFO(Device)->Stats.OutstandingIOCount);
 
     Device->Missing = TRUE;
 
@@ -535,11 +537,9 @@ WnbdDrainQueueOnClose(_In_ PSCSI_DEVICE_INFORMATION DeviceInformation)
         if (Element) {
             RemoveEntryList(&Element->Link);
             Element->Srb->DataTransferLength = 0;
-            Element->Srb->SrbStatus = SRB_STATUS_INTERNAL_ERROR;
-            InterlockedDecrement(&DeviceInformation->OutstandingIoCount);
-            StorPortNotification(RequestComplete, Element->DeviceExtension,
-                Element->Srb);
-            ExFreePool(Element);
+            Element->Srb->SrbStatus = SRB_STATUS_ABORTED;;
+            Element->Aborted = 1;
+            CompleteRequest(DeviceInformation, Element, TRUE);
         }
         Element = NULL;
     }
@@ -553,14 +553,10 @@ Reply:
         Element = CONTAINING_RECORD(ItemLink, SRB_QUEUE_ELEMENT, Link);
         if (Element) {
             RemoveEntryList(&Element->Link);
-            if (!Element->Aborted) {
-                Element->Srb->DataTransferLength = 0;
-                Element->Srb->SrbStatus = SRB_STATUS_INTERNAL_ERROR;
-                InterlockedDecrement(&Device->OutstandingIoCount);
-                StorPortNotification(RequestComplete, Element->DeviceExtension,
-                    Element->Srb);
-            }
-            ExFreePool(Element);
+            Element->Srb->DataTransferLength = 0;
+            Element->Srb->SrbStatus = SRB_STATUS_ABORTED;
+            Element->Aborted = 1;
+            CompleteRequest(DeviceInformation, Element, TRUE);
             InterlockedDecrement64(&DeviceInformation->Stats.PendingSubmittedIORequests);
         }
         Element = NULL;

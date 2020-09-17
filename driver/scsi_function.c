@@ -14,67 +14,6 @@
 #include "util.h"
 #include "userspace.h"
 
-VOID DrainDeviceQueue(PWNBD_SCSI_DEVICE Device, PLIST_ENTRY ListHead,
-                      PKSPIN_LOCK ListLock, PSCSI_DEVICE_INFORMATION DeviceInformation)
-{
-    WNBD_LOG_LOUD(": Enter");
-
-    PLIST_ENTRY Request;
-    PSRB_QUEUE_ELEMENT Element;
-
-    while ((Request = ExInterlockedRemoveHeadList(ListHead, ListLock)) != NULL) {
-        Element = CONTAINING_RECORD(Request, SRB_QUEUE_ELEMENT, Link);
-
-        Element->Srb->DataTransferLength = 0;
-        Element->Srb->SrbStatus = SRB_STATUS_ABORTED;
-        Element->Aborted = 1;
-
-        InterlockedDecrement(&Device->OutstandingIoCount);
-        WNBD_LOG_INFO("Notifying StorPort of completion of %p 0x%llx status: 0x%x(%s)",
-            Element->Srb, Element->Tag, Element->Srb->SrbStatus,
-            WnbdToStringSrbStatus(Element->Srb->SrbStatus));
-        StorPortNotification(RequestComplete, Element->DeviceExtension,
-                             Element->Srb);
-        ExFreePool(Element);
-
-        InterlockedIncrement64(&DeviceInformation->Stats.AbortedUnsubmittedIORequests);
-    }
-}
-
-
-VOID SendAbortFailedForQueue(PLIST_ENTRY ListHead, PKSPIN_LOCK ListLock,
-                             PSCSI_DEVICE_INFORMATION DeviceInformation)
-{
-    WNBD_LOG_LOUD(": Enter");
-
-    PSRB_QUEUE_ELEMENT Element;
-    PLIST_ENTRY ItemLink, ItemNext;
-    KIRQL Irql = { 0 };
-
-    KeAcquireSpinLock(ListLock, &Irql);
-    LIST_FORALL_SAFE(ListHead, ItemLink, ItemNext) {
-        Element = CONTAINING_RECORD(ItemLink, SRB_QUEUE_ELEMENT, Link);
-
-        Element->Srb->DataTransferLength = 0;
-        Element->Srb->SrbStatus = SRB_STATUS_ABORTED;
-
-        // If it's marked as aborted, it means that Storport was already notified.
-        // Double completion leads to a crash.
-        if(!Element->Aborted) {
-            InterlockedDecrement(&Device->OutstandingIoCount);
-            WNBD_LOG_INFO("Notifying StorPort of completion of %p 0x%llx status: 0x%x(%s)",
-            Element->Srb, Element->Tag, Element->Srb->SrbStatus,
-            WnbdToStringSrbStatus(Element->Srb->SrbStatus));
-            StorPortNotification(RequestComplete, Element->DeviceExtension,
-                                 Element->Srb);
-            Element->Aborted = 1;
-
-            InterlockedIncrement64(&DeviceInformation->Stats.AbortedUnsubmittedIORequests);
-        }
-    }
-    KeReleaseSpinLock(ListLock, Irql);
-}
-
 UCHAR DrainDeviceQueues(PVOID DeviceExtension,
                         PSCSI_REQUEST_BLOCK Srb)
 
@@ -121,21 +60,16 @@ UCHAR DrainDeviceQueues(PVOID DeviceExtension,
         goto Exit;
     }
     if (Device->Missing) {
-        PSCSI_DEVICE_INFORMATION Info = (PSCSI_DEVICE_INFORMATION)Device->ScsiDeviceExtension;
         WNBD_LOG_WARN("%p is marked for deletion. PathId = %d. TargetId = %d. LUN = %d",
             Device, Srb->PathId, Srb->TargetId, Srb->Lun);
         /// Drain the queue here because the device doesn't theoretically exist;
-        DrainDeviceQueue(Device, &Info->RequestListHead, &Info->RequestListLock, Info);
-        DrainDeviceQueue(Device, &Info->ReplyListHead, &Info->ReplyListLock, Info);
+        DrainDeviceQueue(WNBD_DEV_INFO(Device), FALSE);
+        DrainDeviceQueue(WNBD_DEV_INFO(Device), TRUE);
         goto Exit;
     }
-    PSCSI_DEVICE_INFORMATION Info = (PSCSI_DEVICE_INFORMATION)Device->ScsiDeviceExtension;
 
-    DrainDeviceQueue(Device, &Info->RequestListHead, &Info->RequestListLock, Info);
-    // Should we set those in-flight requests to SRB_STATUS_ABORT_FAILED?
-    // We can't set them to SRB_STATUS_ABORTED because those requests have been
-    // submitted and will most probably complete.
-    SendAbortFailedForQueue(&Info->ReplyListHead, &Info->ReplyListLock, Info);
+    DrainDeviceQueue(WNBD_DEV_INFO(Device), FALSE);
+    AbortSubmittedRequests(WNBD_DEV_INFO(Device));
 
     SrbStatus = SRB_STATUS_SUCCESS;
 
@@ -257,14 +191,14 @@ WnbdExecuteScsiFunction(PVOID DeviceExtension,
         goto Exit;
     }
 
-    InterlockedIncrement(&Device->OutstandingIoCount);
+    InterlockedIncrement64(&WNBD_DEV_INFO(Device)->Stats.OutstandingIOCount);
     Status = WnbdHandleSrbOperation(DeviceExtension, Device->ScsiDeviceExtension, Srb);
 
     if(STATUS_PENDING == Status) {
         *Complete = FALSE;
         SrbStatus = SRB_STATUS_PENDING;
     } else {
-        InterlockedDecrement(&Device->OutstandingIoCount);
+        InterlockedDecrement64(&WNBD_DEV_INFO(Device)->Stats.OutstandingIOCount);
         SrbStatus = Srb->SrbStatus;
     }
 

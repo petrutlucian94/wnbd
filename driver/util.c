@@ -15,6 +15,70 @@
 #include "userspace.h"
 #include "util.h"
 
+VOID DrainDeviceQueue(PSCSI_DEVICE_INFORMATION DeviceInformation,
+                      BOOLEAN SubmittedRequests)
+{
+    WNBD_LOG_LOUD(": Enter");
+
+    PLIST_ENTRY Request;
+    PSRB_QUEUE_ELEMENT Element;
+    PLIST_ENTRY ListHead;
+    PKSPIN_LOCK ListLock;
+
+    if (SubmittedRequests) {
+        ListHead = &DeviceInformation->RequestListHead;
+        ListLock = &DeviceInformation->RequestListLock;
+    }
+    else {
+        ListHead = &DeviceInformation->ReplyListHead;
+        ListLock = &DeviceInformation->ReplyListLock;
+    }
+
+    while ((Request = ExInterlockedRemoveHeadList(ListHead, ListLock)) != NULL) {
+        Element = CONTAINING_RECORD(Request, SRB_QUEUE_ELEMENT, Link);
+        Element->Srb->DataTransferLength = 0;
+        Element->Srb->SrbStatus = SRB_STATUS_ABORTED;
+        if (!Element->Aborted) {
+            Element->Aborted = 1;
+            if (SubmittedRequests)
+                InterlockedIncrement64(&DeviceInformation->Stats.AbortedSubmittedIORequests);
+            else
+                InterlockedIncrement64(&DeviceInformation->Stats.AbortedUnsubmittedIORequests);
+        }
+        CompleteRequest(DeviceInformation, Element, TRUE);
+    }
+}
+
+VOID AbortSubmittedRequests(PSCSI_DEVICE_INFORMATION DeviceInformation)
+{
+    // We're marking submitted requests as aborted and notifying Storport. We only cleaning
+    // them up when eventually receiving a reply from the storage backend (needed by NBD,
+    // in which case the IO payload is otherwise unknown).
+    // TODO: consider cleaning up aborted requests when not using NBD. For NBD, we might
+    // have a limit of aborted requests that we keep around.
+    WNBD_LOG_LOUD(": Enter");
+
+    PLIST_ENTRY ListHead = &DeviceInformation->ReplyListHead;
+    PKSPIN_LOCK ListLock = &DeviceInformation->ReplyListLock;
+
+    PSRB_QUEUE_ELEMENT Element;
+    PLIST_ENTRY ItemLink, ItemNext;
+    KIRQL Irql = { 0 };
+
+    KeAcquireSpinLock(ListLock, &Irql);
+    LIST_FORALL_SAFE(ListHead, ItemLink, ItemNext) {
+        Element = CONTAINING_RECORD(ItemLink, SRB_QUEUE_ELEMENT, Link);
+        Element->Srb->DataTransferLength = 0;
+        Element->Srb->SrbStatus = SRB_STATUS_ABORTED;
+        if (!Element->Aborted) {
+            Element->Aborted = 1;
+            InterlockedIncrement64(&DeviceInformation->Stats.AbortedUnsubmittedIORequests);
+        }
+        CompleteRequest(DeviceInformation, Element, FALSE);
+    }
+    KeReleaseSpinLock(ListLock, Irql);
+}
+
 VOID
 WnbdDeleteScsiInformation(_In_ PVOID ScsiInformation)
 {
@@ -24,29 +88,8 @@ WnbdDeleteScsiInformation(_In_ PVOID ScsiInformation)
     KeEnterCriticalRegion();
     ExAcquireResourceExclusiveLite(&ScsiInfo->GlobalInformation->ConnectionMutex, TRUE);
 
-    PLIST_ENTRY Request;
-    PSRB_QUEUE_ELEMENT Element;
-
-    while ((Request = ExInterlockedRemoveHeadList(&ScsiInfo->RequestListHead, &ScsiInfo->RequestListLock)) != NULL) {
-        Element = CONTAINING_RECORD(Request, SRB_QUEUE_ELEMENT, Link);
-        Element->Srb->DataTransferLength = 0;
-        Element->Srb->SrbStatus = SRB_STATUS_ABORTED;
-        PWNBD_SCSI_DEVICE Device = (PWNBD_SCSI_DEVICE)ScsiInfo->Device;
-        InterlockedDecrement(&Device->OutstandingIoCount);
-        ExFreePool(Element);
-    }
-
-    while ((Request = ExInterlockedRemoveHeadList(&ScsiInfo->ReplyListHead, &ScsiInfo->ReplyListLock)) != NULL) {
-        Element = CONTAINING_RECORD(Request, SRB_QUEUE_ELEMENT, Link);
-        Element->Srb->DataTransferLength = 0;
-        Element->Srb->SrbStatus = SRB_STATUS_ABORTED;
-        PWNBD_SCSI_DEVICE Device = (PWNBD_SCSI_DEVICE)ScsiInfo->Device;
-        InterlockedDecrement(&Device->OutstandingIoCount);
-        WNBD_LOG_INFO("Notifying StorPort of completion of %p status: 0x%x(%s)",
-            Element->Srb, Element->Srb->SrbStatus, WnbdToStringSrbStatus(Element->Srb->SrbStatus));
-        StorPortNotification(RequestComplete, Element->DeviceExtension, Element->Srb);
-        ExFreePool(Element);
-    }
+    DrainDeviceQueue(ScsiInfo, FALSE);
+    DrainDeviceQueue(ScsiInfo, TRUE);
 
     if(ScsiInfo->InquiryData) {
         ExFreePool(ScsiInfo->InquiryData);
@@ -344,10 +387,7 @@ WnbdProcessDeviceThreadRequests(_In_ PSCSI_DEVICE_INFORMATION DeviceInformation)
         if(!ValidateScsiRequest(DeviceInformation, Element)) {
             Element->Srb->DataTransferLength = 0;
             Element->Srb->SrbStatus = SRB_STATUS_INVALID_REQUEST;
-            StorPortNotification(RequestComplete,
-                                 Element->DeviceExtension,
-                                 Element->Srb);
-            ExFreePool(Element);
+            CompleteRequest(DeviceInformation, Element, TRUE);
             InterlockedDecrement64(&DeviceInformation->Stats.UnsubmittedIORequests);
             continue;
         }
@@ -632,12 +672,7 @@ WnbdProcessDeviceThreadReplies(_In_ PSCSI_DEVICE_INFORMATION DeviceInformation)
 Exit:
     if (Element) {
         if(!Element->Aborted) {
-            WNBD_LOG_INFO("Notifying StorPort of completion of %p status: 0x%x(%s)",
-                Element->Srb, Element->Srb->SrbStatus,
-                WnbdToStringSrbStatus(Element->Srb->SrbStatus));
-            InterlockedDecrement(&DeviceInformation->Device->OutstandingIoCount);
-            StorPortNotification(RequestComplete, Element->DeviceExtension,
-                                 Element->Srb);
+            CompleteRequest(DeviceInformation, Element, FALSE);
         }
         ExFreePool(Element);
     }
@@ -709,4 +744,22 @@ UCHAR SetSrbStatus(PVOID Srb, PWNBD_STATUS Status)
     }
 
     return SrbStatus;
+}
+
+VOID CompleteRequest(PSCSI_DEVICE_INFORMATION DeviceInformation,
+                     PSRB_QUEUE_ELEMENT Element, BOOLEAN FreeElement) {
+    // We must be very careful not to complete the same SRB twice in order
+    // to avoid crashes.
+    if (!InterlockedExchange8((CHAR*)&Element->Completed, TRUE)) {
+        WNBD_LOG_LOUD(
+            "Notifying StorPort of completion of %p 0x%llx status: 0x%x(%s)",
+            Element->Srb, Element->Tag, Element->Srb->SrbStatus,
+            WnbdToStringSrbStatus(Element->Srb->SrbStatus));
+        StorPortNotification(RequestComplete, Element->DeviceExtension, Element->Srb);
+        InterlockedDecrement64(&DeviceInformation->Stats.OutstandingIOCount);
+    }
+
+    if (FreeElement) {
+        ExFreePool(Element);
+    }
 }

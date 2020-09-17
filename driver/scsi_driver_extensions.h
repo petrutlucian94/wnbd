@@ -40,7 +40,6 @@ typedef struct _WNBD_SCSI_DEVICE {
 
     BOOLEAN				Missing;
     BOOLEAN				ReportedMissing;
-    LONG				OutstandingIoCount;
 } WNBD_SCSI_DEVICE, *PWNBD_SCSI_DEVICE;
 
 typedef struct _WNBD_LU_EXTENSION {

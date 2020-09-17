@@ -11,6 +11,28 @@
 #include "userspace.h"
 #include "nbd_protocol.h"
 
+typedef struct _SRB_QUEUE_ELEMENT {
+    LIST_ENTRY Link;
+    PSCSI_REQUEST_BLOCK Srb;
+    UINT64 StartingLbn;
+    ULONG ReadLength;
+    BOOLEAN FUA;
+    PVOID DeviceExtension;
+    UINT64 Tag;
+    BOOLEAN Aborted;
+    BOOLEAN Completed;
+} SRB_QUEUE_ELEMENT, * PSRB_QUEUE_ELEMENT;
+
+VOID
+DrainDeviceQueue(_In_ PSCSI_DEVICE_INFORMATION DeviceInformation,
+                 _In_ BOOLEAN SubmittedRequests);
+VOID
+AbortSubmittedRequests(_In_ PSCSI_DEVICE_INFORMATION DeviceInformation);
+VOID
+CompleteRequest(_In_ PSCSI_DEVICE_INFORMATION DeviceInformation,
+                _In_ PSRB_QUEUE_ELEMENT Element,
+                _In_ BOOLEAN FreeElement);
+
 VOID
 WnbdDeviceCleanerThread(_In_ PVOID Context);
 
@@ -30,17 +52,6 @@ WnbdFindDeviceEx(
     _In_ UCHAR PathId,
     _In_ UCHAR TargetId,
     _In_ UCHAR Lun);
-
-typedef struct _SRB_QUEUE_ELEMENT {
-    LIST_ENTRY Link;
-    PSCSI_REQUEST_BLOCK Srb;
-    UINT64 StartingLbn;
-    ULONG ReadLength;
-    BOOLEAN FUA;
-    PVOID DeviceExtension;
-    UINT64 Tag;
-    BOOLEAN Aborted;
-} SRB_QUEUE_ELEMENT, * PSRB_QUEUE_ELEMENT;
 
 VOID
 WnbdDeviceRequestThread(_In_ PVOID Context);

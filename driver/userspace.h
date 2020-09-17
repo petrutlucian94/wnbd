@@ -22,6 +22,9 @@
 #define WNBD_CONNECTION_ID_FROM_ADDR(PathId, TargetId, Lun) \
     ((1 << 24 | (PathId) << 16) | ((TargetId) << 8) | (Lun))
 
+// TODO: consider merging WNBD_LU_EXTENSION, WNBD_SCSI_DEVICE and SCSI_DEVICE_INFORMATION.
+#define WNBD_DEV_INFO(Device) ((PSCSI_DEVICE_INFORMATION)Device->ScsiDeviceExtension)
+
 typedef struct _USER_ENTRY {
     LIST_ENTRY                         ListEntry;
     struct _SCSI_DEVICE_INFORMATION*   ScsiInformation;

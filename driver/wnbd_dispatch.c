@@ -164,12 +164,8 @@ NTSTATUS WnbdDispatchRequest(
         default:
             Element->Srb->DataTransferLength = 0;
             Element->Srb->SrbStatus = SRB_STATUS_INVALID_REQUEST;
-            StorPortNotification(RequestComplete,
-                                 Element->DeviceExtension,
-                                 Element->Srb);
-            ExFreePool(Element);
+            CompleteRequest(DeviceInfo, Element, TRUE);
             InterlockedDecrement64(&DeviceInfo->Stats.UnsubmittedIORequests);
-            InterlockedDecrement(&DeviceInfo->Device->OutstandingIoCount);
             continue;
         }
 
@@ -191,13 +187,8 @@ NTSTATUS WnbdDispatchRequest(
                 // The user buffer must be at least as large as
                 // the specified maximum transfer length.
                 Element->Srb->SrbStatus = SRB_STATUS_INTERNAL_ERROR;
-                StorPortNotification(
-                    RequestComplete,
-                    Element->DeviceExtension,
-                    Element->Srb);
-                ExFreePool(Element);
+                CompleteRequest(DeviceInfo, Element, TRUE);
                 InterlockedDecrement64(&DeviceInfo->Stats.UnsubmittedIORequests);
-                InterlockedDecrement(&DeviceInfo->Device->OutstandingIoCount);
                 Status = STATUS_BUFFER_TOO_SMALL;
                 goto Exit;
             }
@@ -205,15 +196,9 @@ NTSTATUS WnbdDispatchRequest(
             PVOID SrbBuffer;
             if (StorPortGetSystemAddress(Element->DeviceExtension,
                                          Element->Srb, &SrbBuffer)) {
-                // TODO: consider moving this part to a helper function.
                 Element->Srb->SrbStatus = SRB_STATUS_INTERNAL_ERROR;
-                StorPortNotification(
-                    RequestComplete,
-                    Element->DeviceExtension,
-                    Element->Srb);
-                ExFreePool(Element);
+                CompleteRequest(DeviceInfo, Element, TRUE);
                 InterlockedDecrement64(&DeviceInfo->Stats.UnsubmittedIORequests);
-                InterlockedDecrement(&DeviceInfo->Device->OutstandingIoCount);
                 continue;
             }
 
@@ -354,13 +339,7 @@ Exit:
     }
 
     if (!Element->Aborted) {
-        WNBD_LOG_LOUD(
-            "Notifying StorPort of completion of %p status: 0x%x(%s)",
-            Element->Srb, Element->Srb->SrbStatus,
-            WnbdToStringSrbStatus(Element->Srb->SrbStatus));
-        InterlockedDecrement(&DeviceInfo->Device->OutstandingIoCount);
-        StorPortNotification(RequestComplete, Element->DeviceExtension,
-                             Element->Srb);
+        CompleteRequest(DeviceInfo, Element, FALSE);
     }
     ExFreePool(Element);
 
