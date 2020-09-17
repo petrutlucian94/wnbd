@@ -630,12 +630,12 @@ WnbdProcessDeviceThreadReplies(_In_ PSCSI_DEVICE_INFORMATION DeviceInformation)
     }
 
 Exit:
-    InterlockedDecrement(&DeviceInformation->Device->OutstandingIoCount);
     if (Element) {
         if(!Element->Aborted) {
             WNBD_LOG_INFO("Notifying StorPort of completion of %p status: 0x%x(%s)",
                 Element->Srb, Element->Srb->SrbStatus,
                 WnbdToStringSrbStatus(Element->Srb->SrbStatus));
+            InterlockedDecrement(&DeviceInformation->Device->OutstandingIoCount);
             StorPortNotification(RequestComplete, Element->DeviceExtension,
                                  Element->Srb);
         }

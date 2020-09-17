@@ -536,6 +536,7 @@ WnbdDrainQueueOnClose(_In_ PSCSI_DEVICE_INFORMATION DeviceInformation)
             RemoveEntryList(&Element->Link);
             Element->Srb->DataTransferLength = 0;
             Element->Srb->SrbStatus = SRB_STATUS_INTERNAL_ERROR;
+            InterlockedDecrement(&DeviceInformation->OutstandingIoCount);
             StorPortNotification(RequestComplete, Element->DeviceExtension,
                 Element->Srb);
             ExFreePool(Element);
@@ -555,6 +556,7 @@ Reply:
             if (!Element->Aborted) {
                 Element->Srb->DataTransferLength = 0;
                 Element->Srb->SrbStatus = SRB_STATUS_INTERNAL_ERROR;
+                InterlockedDecrement(&Device->OutstandingIoCount);
                 StorPortNotification(RequestComplete, Element->DeviceExtension,
                     Element->Srb);
             }

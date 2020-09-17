@@ -61,6 +61,7 @@ VOID SendAbortFailedForQueue(PLIST_ENTRY ListHead, PKSPIN_LOCK ListLock,
         // If it's marked as aborted, it means that Storport was already notified.
         // Double completion leads to a crash.
         if(!Element->Aborted) {
+            InterlockedDecrement(&Device->OutstandingIoCount);
             WNBD_LOG_INFO("Notifying StorPort of completion of %p 0x%llx status: 0x%x(%s)",
             Element->Srb, Element->Tag, Element->Srb->SrbStatus,
             WnbdToStringSrbStatus(Element->Srb->SrbStatus));
