@@ -52,8 +52,8 @@ BOOLEAN
 IsReadSrb(_In_ PSCSI_REQUEST_BLOCK Srb);
 VOID
 WnbdProcessDeviceThreadReplies(_In_ PSCSI_DEVICE_INFORMATION DeviceInformation);
-VOID CloseConnection(_In_ PSCSI_DEVICE_INFORMATION DeviceInformation);
-VOID DisconnectConnection(_In_ PSCSI_DEVICE_INFORMATION DeviceInformation);
+VOID DisconnectSocket(_In_ PSCSI_DEVICE_INFORMATION DeviceInformation);
+VOID CloseSocket(_In_ PSCSI_DEVICE_INFORMATION DeviceInformation);
 int ScsiOpToNbdReqType(_In_ int ScsiOp);
 BOOLEAN ValidateScsiRequest(
     _In_ PSCSI_DEVICE_INFORMATION DeviceInformation,

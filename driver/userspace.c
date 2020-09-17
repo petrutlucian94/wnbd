@@ -600,7 +600,7 @@ WnbdDeleteConnection(PGLOBAL_INFORMATION GInfo,
         LARGE_INTEGER Timeout;
         // TODO: consider making this configurable, currently 120s.
         Timeout.QuadPart = (-120 * 1000 * 10000);
-        CloseConnection(ScsiInfo);
+        DisconnectSocket(ScsiInfo);
 
         // Ensure that the device isn't currently being accessed.
         ExWaitForRundownProtectionRelease(&ScsiInfo->RundownProtection);
@@ -612,7 +612,7 @@ WnbdDeleteConnection(PGLOBAL_INFORMATION GInfo,
             ObDereferenceObject(ScsiInfo->DeviceReplyThread);
         }
         WnbdDrainQueueOnClose(ScsiInfo);
-        DisconnectConnection(ScsiInfo);
+        CloseSocket(ScsiInfo);
 
         if (!WnbdSetDeviceMissing(ScsiInfo->Device,TRUE)) {
             WNBD_LOG_WARN("Could not delete media because it is still in use.");

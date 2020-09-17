@@ -53,7 +53,7 @@ WnbdDeleteScsiInformation(_In_ PVOID ScsiInformation)
         ScsiInfo->InquiryData = NULL;
     }
 
-    DisconnectConnection(ScsiInfo);
+    CloseSocket(ScsiInfo);
 
     ExDeleteResourceLite(&ScsiInfo->SocketLock);
 
@@ -277,42 +277,42 @@ WnbdRequestWrite(_In_ PSCSI_DEVICE_INFORMATION DeviceInformation,
     return Status;
 }
 
-VOID DisconnectConnection(_In_ PSCSI_DEVICE_INFORMATION DeviceInformation) {
+VOID CloseSocket(_In_ PSCSI_DEVICE_INFORMATION DeviceInformation) {
     KeEnterCriticalRegion();
-    ExAcquireResourceExclusiveLite(
-        &DeviceInformation->SocketLock, TRUE);
+    ExAcquireResourceExclusiveLite(&DeviceInformation->SocketLock, TRUE);
     if (-1 != DeviceInformation->SocketToClose) {
+        WNBD_LOG_INFO("Closing socket FD: %d", DeviceInformation->SocketToClose);
+        Close(DeviceInformation->SocketToClose);
+    }
+    if (-1 != DeviceInformation->Socket) {
         WNBD_LOG_INFO("Closing socket FD: %d", DeviceInformation->Socket);
-        if (-1 != DeviceInformation->Socket) {
-            Close(DeviceInformation->Socket);
-        } else {
-            Close(DeviceInformation->SocketToClose);
-        }
-        DeviceInformation->Socket = -1;
-        DeviceInformation->SocketToClose = -1;
+        Close(DeviceInformation->Socket);
+    }
+
+    DeviceInformation->Socket = -1;
+    DeviceInformation->SocketToClose = -1;
+    if (DeviceInformation->Device) {
         DeviceInformation->Device->Missing = TRUE;
     }
     ExReleaseResourceLite(&DeviceInformation->SocketLock);
     KeLeaveCriticalRegion();
 }
 
-VOID CloseConnection(_In_ PSCSI_DEVICE_INFORMATION DeviceInformation) {
+VOID DisconnectSocket(_In_ PSCSI_DEVICE_INFORMATION DeviceInformation) {
     KeEnterCriticalRegion();
-    ExAcquireResourceExclusiveLite(
-        &DeviceInformation->SocketLock, TRUE);
-    // TODO: is SocketToClose actually necessary? We're closing both
-    // SocketToClose and Socket. This logic seems very convoluted.
-    // Also, "Close" is calling the socket "Disconnect" function and
-    // Disconnect is actually calling "Close" ?! 
+    ExAcquireResourceExclusiveLite(&DeviceInformation->SocketLock, TRUE);
     DeviceInformation->SocketToClose = -1;
     if (-1 != DeviceInformation->Socket) {
         WNBD_LOG_INFO("Closing socket FD: %d", DeviceInformation->Socket);
         DeviceInformation->SocketToClose = DeviceInformation->Socket;
-        Disconnect(DeviceInformation->Socket);
+        // We're setting this to -1 to avoid sending further requests. We're
+        // using SocketToClose so that CloseSocket can actually close it.
+        // TODO: consider merging those two functions.
         DeviceInformation->Socket = -1;
-        if (DeviceInformation->Device) {
-            DeviceInformation->Device->Missing = TRUE;
-        }
+        Disconnect(DeviceInformation->Socket);
+    }
+    if (DeviceInformation->Device) {
+        DeviceInformation->Device->Missing = TRUE;
     }
     ExReleaseResourceLite(&DeviceInformation->SocketLock);
     KeLeaveCriticalRegion();
@@ -398,7 +398,7 @@ WnbdProcessDeviceThreadRequests(_In_ PSCSI_DEVICE_INFORMATION DeviceInformation)
             if (STATUS_CONNECTION_RESET == Status ||
                 STATUS_CONNECTION_DISCONNECTED == Status ||
                 STATUS_CONNECTION_ABORTED == Status) {
-                CloseConnection(DeviceInformation);
+                DisconnectSocket(DeviceInformation);
             }
         }
     }
@@ -523,7 +523,7 @@ WnbdProcessDeviceThreadReplies(_In_ PSCSI_DEVICE_INFORMATION DeviceInformation)
 
     Status = NbdReadReply(DeviceInformation->Socket, &Reply);
     if (Status) {
-        CloseConnection(DeviceInformation);
+        DisconnectSocket(DeviceInformation);
         // Sleep for a bit to avoid a lazy poll here since the connection
         // could already be closed by the time the device is actually removed.
         LARGE_INTEGER Timeout;
@@ -547,7 +547,7 @@ WnbdProcessDeviceThreadReplies(_In_ PSCSI_DEVICE_INFORMATION DeviceInformation)
     if(!Element) {
         WNBD_LOG_ERROR("Received reply with no matching request tag: 0x%llx",
             Reply.Handle);
-        CloseConnection(DeviceInformation);
+        DisconnectSocket(DeviceInformation);
         goto Exit;
     }
 
@@ -565,7 +565,7 @@ WnbdProcessDeviceThreadReplies(_In_ PSCSI_DEVICE_INFORMATION DeviceInformation)
                 WNBD_LOG_ERROR("Could not get SRB %p 0x%llx data buffer. Error: %d.",
                                Element->Srb, Element->Tag, error);
                 Element->Srb->SrbStatus = SRB_STATUS_INTERNAL_ERROR;
-                CloseConnection(DeviceInformation);
+                DisconnectSocket(DeviceInformation);
                 goto Exit;
             }
         }
@@ -579,7 +579,7 @@ WnbdProcessDeviceThreadReplies(_In_ PSCSI_DEVICE_INFORMATION DeviceInformation)
             TempBuff = NbdMalloc(Element->ReadLength);
             if (!TempBuff) {
                 Status = STATUS_INSUFFICIENT_RESOURCES;
-                CloseConnection(DeviceInformation);
+                DisconnectSocket(DeviceInformation);
                 goto Exit;
             }
             DeviceInformation->ReadPreallocatedBufferLength = Element->ReadLength;
@@ -594,7 +594,7 @@ WnbdProcessDeviceThreadReplies(_In_ PSCSI_DEVICE_INFORMATION DeviceInformation)
                            Element->Srb, Element->Tag, error);
             Element->Srb->DataTransferLength = 0;
             Element->Srb->SrbStatus = SRB_STATUS_INTERNAL_ERROR;
-            CloseConnection(DeviceInformation);
+            DisconnectSocket(DeviceInformation);
             goto Exit;
         } else {
             if(!Element->Aborted) {
