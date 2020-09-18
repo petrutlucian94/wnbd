@@ -107,8 +107,4 @@ WnbdDeleteConnection(_In_ PGLOBAL_INFORMATION GInfo,
 VOID
 WnbdInitScsiIds();
 
-BOOLEAN
-WnbdSetDeviceMissing(_In_ PVOID Handle,
-                     _In_ BOOLEAN Force);
-
 #endif

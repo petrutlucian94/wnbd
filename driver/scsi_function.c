@@ -46,8 +46,7 @@ UCHAR DrainDeviceQueues(PVOID DeviceExtension,
         goto Exit;
     }
 
-    Device = WnbdFindDevice(LuExtension, DeviceExtension,
-                            Srb->PathId, Srb->TargetId, Srb->Lun);
+    Device = WnbdFindDevice(DeviceExtension, Srb->PathId, Srb->TargetId, Srb->Lun);
     if (NULL == Device) {
         WNBD_LOG_INFO("Could not find device PathId: %d TargetId: %d LUN: %d",
             Srb->PathId, Srb->TargetId, Srb->Lun);
@@ -57,14 +56,6 @@ UCHAR DrainDeviceQueues(PVOID DeviceExtension,
     if (NULL == Device->ScsiDeviceExtension) {
         WNBD_LOG_ERROR("%p has no ScsiDeviceExtension. PathId = %d. TargetId = %d. LUN = %d",
             Device, Srb->PathId, Srb->TargetId, Srb->Lun);
-        goto Exit;
-    }
-    if (Device->Missing) {
-        WNBD_LOG_WARN("%p is marked for deletion. PathId = %d. TargetId = %d. LUN = %d",
-            Device, Srb->PathId, Srb->TargetId, Srb->Lun);
-        /// Drain the queue here because the device doesn't theoretically exist;
-        DrainDeviceQueue(WNBD_DEV_INFO(Device), FALSE);
-        DrainDeviceQueue(WNBD_DEV_INFO(Device), TRUE);
         goto Exit;
     }
 
@@ -172,8 +163,7 @@ WnbdExecuteScsiFunction(PVOID DeviceExtension,
         goto Exit;
     }
 
-    Device = WnbdFindDevice(LuExtension, DeviceExtension,
-                            Srb->PathId, Srb->TargetId, Srb->Lun);
+    Device = WnbdFindDevice(DeviceExtension, Srb->PathId, Srb->TargetId, Srb->Lun);
     if (NULL == Device) {
         WNBD_LOG_INFO("Could not find device PathId: %d TargetId: %d LUN: %d",
                       Srb->PathId, Srb->TargetId, Srb->Lun);
@@ -185,7 +175,7 @@ WnbdExecuteScsiFunction(PVOID DeviceExtension,
                        Device, Srb->PathId, Srb->TargetId, Srb->Lun);
         goto Exit;
     }
-    if (Device->Missing) {
+    if (WNBD_DEV_INFO(Device)->HardTerminateDevice) {
         WNBD_LOG_WARN("%p is marked for deletion. PathId = %d. TargetId = %d. LUN = %d",
                       Device, Srb->PathId, Srb->TargetId, Srb->Lun);
         goto Exit;

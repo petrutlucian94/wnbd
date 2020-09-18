@@ -40,18 +40,10 @@ VOID
 WnbdDeleteScsiInformation(_In_ PVOID ScsiInformation);
 
 PWNBD_SCSI_DEVICE
-WnbdFindDevice(_In_ PWNBD_LU_EXTENSION LuExtension,
-               _In_ PWNBD_EXTENSION DeviceExtension,
+WnbdFindDevice(_In_ PWNBD_EXTENSION DeviceExtension,
                _In_ UCHAR PathId,
                _In_ UCHAR TargetId,
                _In_ UCHAR Lun);
-
-PWNBD_SCSI_DEVICE
-WnbdFindDeviceEx(
-    _In_ PWNBD_EXTENSION DeviceExtension,
-    _In_ UCHAR PathId,
-    _In_ UCHAR TargetId,
-    _In_ UCHAR Lun);
 
 VOID
 WnbdDeviceRequestThread(_In_ PVOID Context);

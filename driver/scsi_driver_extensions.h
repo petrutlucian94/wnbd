@@ -36,10 +36,6 @@ typedef struct _WNBD_SCSI_DEVICE {
     ULONG				Lun;
 
     PINQUIRYDATA		PInquiryData;
-    BOOLEAN				ReadOnly;
-
-    BOOLEAN				Missing;
-    BOOLEAN				ReportedMissing;
 } WNBD_SCSI_DEVICE, *PWNBD_SCSI_DEVICE;
 
 typedef struct _WNBD_LU_EXTENSION {
@@ -47,7 +43,6 @@ typedef struct _WNBD_LU_EXTENSION {
     ULONG					TargetId;
     ULONG					Lun;
     PVOID					PDriverGlobalExtension;
-    struct _WNBD_SCSI_DEVICE*	WnbdScsiDevice;
 } WNBD_LU_EXTENSION, *PWNBD_LU_EXTENSION;
 
 SCSI_ADAPTER_CONTROL_STATUS

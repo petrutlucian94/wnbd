@@ -129,7 +129,6 @@ PVOID WnbdCreateScsiDevice(_In_ PVOID Extension,
     Dev->TargetId = TargetId;
     Dev->Lun = Lun;
     Dev->PInquiryData = InquiryData;
-    Dev->Missing = FALSE;
     Dev->DriverExtension = (PVOID) Ext;
 
     WNBD_LOG_LOUD(": Exit");
@@ -492,35 +491,6 @@ WnbdDeleteConnectionEntry(PUSER_ENTRY Entry)
     return STATUS_SUCCESS;
 }
 
-_Use_decl_annotations_
-BOOLEAN
-WnbdSetDeviceMissing(PVOID Handle,
-                     BOOLEAN Force)
-{
-    WNBD_LOG_LOUD(": Enter");
-    // TODO: no need for void pointer.
-    PWNBD_SCSI_DEVICE Device = (PWNBD_SCSI_DEVICE)Handle;
-    
-    if (Device == NULL) {
-        return TRUE;
-    }
-
-    if (WNBD_DEV_INFO(Device)->Stats.OutstandingIOCount && !Force) {
-        return FALSE;
-    }
-    
-    ASSERT(!&WNBD_DEV_INFO(Device)->Stats.OutstandingIOCount);
-    WNBD_LOG_INFO("Disconnecting with, OutstandingIOCount: %d",
-                  &WNBD_DEV_INFO(Device)->Stats.OutstandingIOCount);
-
-    Device->Missing = TRUE;
-
-    WNBD_LOG_LOUD(": Exit");
-
-    return TRUE;
-}
-
-
 VOID
 WnbdDrainQueueOnClose(_In_ PSCSI_DEVICE_INFORMATION DeviceInformation)
 {
@@ -612,10 +582,7 @@ WnbdDeleteConnection(PGLOBAL_INFORMATION GInfo,
         WnbdDrainQueueOnClose(ScsiInfo);
         CloseSocket(ScsiInfo);
 
-        if (!WnbdSetDeviceMissing(ScsiInfo->Device,TRUE)) {
-            WNBD_LOG_WARN("Could not delete media because it is still in use.");
-            return STATUS_UNABLE_TO_UNLOAD_MEDIA;
-        }
+        ScsiInfo->HardTerminateDevice = 1;
         StorPortNotification(BusChangeDetected, GInfo->Handle, 0);
     } else {
         WNBD_LOG_ERROR("Could not find device needed for deletion");

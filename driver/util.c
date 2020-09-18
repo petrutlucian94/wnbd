@@ -140,7 +140,7 @@ WnbdDeleteDevices(_In_ PWNBD_EXTENSION Ext,
     ExAcquireResourceExclusiveLite(&((PGLOBAL_INFORMATION)Ext->GlobalInformation)->ConnectionMutex, TRUE);
     LIST_FORALL_SAFE(&Ext->DeviceList, Link, Next) {
         Device = (PWNBD_SCSI_DEVICE)CONTAINING_RECORD(Link, WNBD_SCSI_DEVICE, ListEntry);
-        if (Device->ReportedMissing || All) {
+        if (WNBD_DEV_INFO(Device)->HardTerminateDevice || All) {
             WNBD_LOG_INFO("Deleting device %p with %d:%d:%d",
                 Device, Device->PathId, Device->TargetId, Device->Lun);
             PSCSI_DEVICE_INFORMATION Info = (PSCSI_DEVICE_INFORMATION)Device->ScsiDeviceExtension;
@@ -173,49 +173,18 @@ WnbdDeviceCleanerThread(_In_ PVOID Context)
 
     while (TRUE) {
         KeWaitForSingleObject(&Ext->DeviceCleanerEvent, Executive, KernelMode, FALSE, NULL);
-
         if (Ext->StopDeviceCleaner) {
-            WNBD_LOG_INFO("Terminating Device Cleaner");
-            WnbdDeleteDevices(Ext, TRUE);
-            break;
+            WNBD_LOG_INFO("Removing all devices.");
         }
-
-        WnbdDeleteDevices(Ext, FALSE);
+        WnbdDeleteDevices(Ext, Ext->StopDeviceCleaner);
     }
 
     WNBD_LOG_LOUD(": Exit");
-
-    (void)PsTerminateSystemThread(STATUS_SUCCESS);
-}
-
-VOID
-WnbdReportMissingDevice(_In_ PWNBD_EXTENSION DeviceExtension,
-                        _In_ PWNBD_SCSI_DEVICE Device,
-                        _In_ PWNBD_LU_EXTENSION LuExtension)
-{
-    WNBD_LOG_LOUD(": Enter");
-    ASSERT(Device);
-    ASSERT(DeviceExtension);
-    ASSERT(LuExtension);
-
-    if (!Device->Missing) {
-        LuExtension->WnbdScsiDevice = Device;
-    } else {
-        if (!Device->ReportedMissing) {
-            WNBD_LOG_INFO(": Scheduling %p to be deleted and waking DeviceCleaner",
-                          Device);
-            Device->ReportedMissing = TRUE;
-            KeSetEvent(&DeviceExtension->DeviceCleanerEvent, IO_DISK_INCREMENT, FALSE);
-        }
-        Device = NULL;
-    }
-
-    WNBD_LOG_LOUD(": Exit");
+    PsTerminateSystemThread(STATUS_SUCCESS);
 }
 
 PWNBD_SCSI_DEVICE
-WnbdFindDevice(_In_ PWNBD_LU_EXTENSION LuExtension,
-               _In_ PWNBD_EXTENSION DeviceExtension,
+WnbdFindDevice(_In_ PWNBD_EXTENSION DeviceExtension,
                _In_ UCHAR PathId,
                _In_ UCHAR TargetId,
                _In_ UCHAR Lun)
@@ -234,7 +203,10 @@ WnbdFindDevice(_In_ PWNBD_LU_EXTENSION LuExtension,
         if (Device->PathId == PathId
             && Device->TargetId == TargetId
             && Device->Lun == Lun) {
-            WnbdReportMissingDevice(DeviceExtension, Device, LuExtension);
+            if (WNBD_DEV_INFO(Device)->HardTerminateDevice) {
+                KeSetEvent(&DeviceExtension->DeviceCleanerEvent,
+                           IO_DISK_INCREMENT, FALSE);
+            }
             break;
         }
         Device = NULL;
@@ -242,50 +214,6 @@ WnbdFindDevice(_In_ PWNBD_LU_EXTENSION LuExtension,
 
     WNBD_LOG_LOUD(": Exit");
 
-    return Device;
-}
-
-PWNBD_SCSI_DEVICE
-WnbdFindDeviceEx(
-    _In_ PWNBD_EXTENSION DeviceExtension,
-    _In_ UCHAR PathId,
-    _In_ UCHAR TargetId,
-    _In_ UCHAR Lun)
-{
-    WNBD_LOG_LOUD(": Enter");
-    ASSERT(DeviceExtension);
-
-    PWNBD_SCSI_DEVICE Device = NULL;
-    PWNBD_LU_EXTENSION LuExtension;
-    KIRQL Irql;
-    KSPIN_LOCK DevLock = DeviceExtension->DeviceListLock;
-    KeAcquireSpinLock(&DevLock, &Irql);
-
-    LuExtension = (PWNBD_LU_EXTENSION)
-        StorPortGetLogicalUnit(DeviceExtension, PathId, TargetId, Lun);
-
-    if (!LuExtension) {
-        WNBD_LOG_ERROR(": Unable to get LUN extension for device PathId: %d TargetId: %d LUN: %d",
-            PathId, TargetId, Lun);
-        goto Exit;
-    }
-
-    Device = WnbdFindDevice(LuExtension, DeviceExtension,
-                            PathId, TargetId, Lun);
-    if (!Device) {
-        WNBD_LOG_INFO("Could not find device PathId: %d TargetId: %d LUN: %d",
-            PathId, TargetId, Lun);
-        goto Exit;
-    }
-
-    if (!Device->ScsiDeviceExtension) {
-        WNBD_LOG_ERROR("%p has no ScsiDeviceExtension. PathId = %d. TargetId = %d. LUN = %d",
-            Device, PathId, TargetId, Lun);
-        goto Exit;
-    }
-
-Exit:
-    KeReleaseSpinLock(&DevLock, Irql);
     return Device;
 }
 
@@ -335,7 +263,7 @@ VOID CloseSocket(_In_ PSCSI_DEVICE_INFORMATION DeviceInformation) {
     DeviceInformation->Socket = -1;
     DeviceInformation->SocketToClose = -1;
     if (DeviceInformation->Device) {
-        DeviceInformation->Device->Missing = TRUE;
+        WNBD_DEV_INFO(DeviceInformation->Device)->HardTerminateDevice = TRUE;
     }
     ExReleaseResourceLite(&DeviceInformation->SocketLock);
     KeLeaveCriticalRegion();
@@ -355,7 +283,7 @@ VOID DisconnectSocket(_In_ PSCSI_DEVICE_INFORMATION DeviceInformation) {
         Disconnect(DeviceInformation->Socket);
     }
     if (DeviceInformation->Device) {
-        DeviceInformation->Device->Missing = TRUE;
+        WNBD_DEV_INFO(DeviceInformation->Device)->HardTerminateDevice = TRUE;
     }
     ExReleaseResourceLite(&DeviceInformation->SocketLock);
     KeLeaveCriticalRegion();
@@ -402,8 +330,7 @@ WnbdProcessDeviceThreadRequests(_In_ PSCSI_DEVICE_INFORMATION DeviceInformation)
             }
         case NBD_CMD_READ:
         case NBD_CMD_FLUSH:
-            if(DeviceInformation->SoftTerminateDevice ||
-                    DeviceInformation->HardTerminateDevice) {
+            if (DeviceInformation->HardTerminateDevice) {
                 return;
             }
             ExInterlockedInsertTailList(
@@ -460,24 +387,18 @@ WnbdDeviceRequestThread(_In_ PVOID Context)
 
     KeSetPriorityThread(KeGetCurrentThread(), LOW_REALTIME_PRIORITY);
 
-    while (TRUE) {
+    while (!DeviceInformation->HardTerminateDevice) {
         // TODO: should this be moved in the WnbdProcessDeviceThreadRequests loop?
-        KeWaitForSingleObject(&DeviceInformation->DeviceEvent, Executive, KernelMode, FALSE, NULL);
-
+        // TODO: also wait for terminate event.
+        KeWaitForSingleObject(&DeviceInformation->DeviceEvent, Executive, KernelMode,
+                              FALSE, NULL);
         if (DeviceInformation->HardTerminateDevice) {
-            WNBD_LOG_INFO("Hard terminate thread: %p", DeviceInformation);
-            PsTerminateSystemThread(STATUS_SUCCESS);
+            break;
         }
-
         WnbdProcessDeviceThreadRequests(DeviceInformation);
-
-        // TODO: should we continue processing requests on soft termination until
-        // we drain our queues?
-        if (DeviceInformation->SoftTerminateDevice) {
-            WNBD_LOG_INFO("Soft terminate thread: %p", DeviceInformation);
-            PsTerminateSystemThread(STATUS_SUCCESS);
-        }
     }
+
+    PsTerminateSystemThread(STATUS_SUCCESS);
 }
 
 VOID
@@ -493,15 +414,11 @@ WnbdDeviceReplyThread(_In_ PVOID Context)
 
     KeSetPriorityThread(KeGetCurrentThread(), LOW_REALTIME_PRIORITY);
 
-    while (TRUE) {
-
-        if (DeviceInformation->SoftTerminateDevice) {
-            WNBD_LOG_INFO("Soft terminate thread: %p", DeviceInformation);
-            PsTerminateSystemThread(STATUS_SUCCESS);
-        }
-
+    while (!DeviceInformation->HardTerminateDevice) {
         WnbdProcessDeviceThreadReplies(DeviceInformation);
     }
+
+    PsTerminateSystemThread(STATUS_SUCCESS);
 }
 
 _Use_decl_annotations_
