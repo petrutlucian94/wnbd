@@ -24,10 +24,8 @@ UCHAR DrainDeviceQueues(PVOID DeviceExtension,
 
     UCHAR SrbStatus = SRB_STATUS_NO_DEVICE;
     PWNBD_SCSI_DEVICE Device;
-    PWNBD_LU_EXTENSION LuExtension;
-    PWNBD_EXTENSION DevExtension = (PWNBD_EXTENSION)DeviceExtension;
     KIRQL Irql;
-    KSPIN_LOCK DevLock = DevExtension->DeviceListLock;
+    KSPIN_LOCK DevLock = ((PWNBD_EXTENSION)DeviceExtension)->DeviceListLock;
     KeAcquireSpinLock(&DevLock, &Irql);
 
     if (SrbGetCdb(Srb)) {
@@ -37,30 +35,16 @@ UCHAR DrainDeviceQueues(PVOID DeviceExtension,
             CdbValue, Srb, CdbValue, Srb->PathId, Srb->TargetId, Srb->Lun);
     }
 
-    LuExtension = (PWNBD_LU_EXTENSION)
-        StorPortGetLogicalUnit(DeviceExtension, Srb->PathId, Srb->TargetId, Srb->Lun);
-
-    if (!LuExtension) {
-        WNBD_LOG_ERROR(": Unable to get LUN extension for device PathId: %d TargetId: %d LUN: %d",
-            Srb->PathId, Srb->TargetId, Srb->Lun);
-        goto Exit;
-    }
-
-    Device = WnbdFindDevice(DeviceExtension, Srb->PathId, Srb->TargetId, Srb->Lun);
+    Device = WnbdFindDeviceByAddr(
+        DeviceExtension, Srb->PathId, Srb->TargetId, Srb->Lun);
     if (NULL == Device) {
         WNBD_LOG_INFO("Could not find device PathId: %d TargetId: %d LUN: %d",
             Srb->PathId, Srb->TargetId, Srb->Lun);
         goto Exit;
     }
 
-    if (NULL == Device->ScsiDeviceExtension) {
-        WNBD_LOG_ERROR("%p has no ScsiDeviceExtension. PathId = %d. TargetId = %d. LUN = %d",
-            Device, Srb->PathId, Srb->TargetId, Srb->Lun);
-        goto Exit;
-    }
-
-    DrainDeviceQueue(WNBD_DEV_INFO(Device), FALSE);
-    AbortSubmittedRequests(WNBD_DEV_INFO(Device));
+    DrainDeviceQueue(Device, FALSE);
+    AbortSubmittedRequests(Device);
 
     SrbStatus = SRB_STATUS_SUCCESS;
 
@@ -141,10 +125,8 @@ WnbdExecuteScsiFunction(PVOID DeviceExtension,
     NTSTATUS Status = STATUS_SUCCESS;
     UCHAR SrbStatus = SRB_STATUS_NO_DEVICE;
     PWNBD_SCSI_DEVICE Device;
-    PWNBD_LU_EXTENSION LuExtension;
-    PWNBD_EXTENSION DevExtension = (PWNBD_EXTENSION)DeviceExtension;
     KIRQL Irql;
-    KSPIN_LOCK DevLock = DevExtension->DeviceListLock;
+    KSPIN_LOCK DevLock = ((PWNBD_EXTENSION)DeviceExtension)->DeviceListLock;
     KeAcquireSpinLock(&DevLock, &Irql);
     *Complete = TRUE;
 
@@ -154,41 +136,28 @@ WnbdExecuteScsiFunction(PVOID DeviceExtension,
         WNBD_LOG_INFO(": Received %#02x command. SRB = 0x%p. CDB = 0x%x. PathId: %d TargetId: %d LUN: %d",
             CdbValue, Srb, CdbValue, Srb->PathId, Srb->TargetId, Srb->Lun);
     }
-    LuExtension = (PWNBD_LU_EXTENSION)
-        StorPortGetLogicalUnit(DeviceExtension, Srb->PathId, Srb->TargetId, Srb->Lun );
 
-    if(!LuExtension) {
-        WNBD_LOG_ERROR(": Unable to get LUN extension for device PathId: %d TargetId: %d LUN: %d",
-                       Srb->PathId, Srb->TargetId, Srb->Lun);
-        goto Exit;
-    }
-
-    Device = WnbdFindDevice(DeviceExtension, Srb->PathId, Srb->TargetId, Srb->Lun);
+    Device = WnbdFindDeviceByAddr(
+        (PWNBD_EXTENSION)DeviceExtension, Srb->PathId, Srb->TargetId, Srb->Lun);
     if (NULL == Device) {
         WNBD_LOG_INFO("Could not find device PathId: %d TargetId: %d LUN: %d",
                       Srb->PathId, Srb->TargetId, Srb->Lun);
         goto Exit;
     }
-
-    if (NULL == Device->ScsiDeviceExtension) {
-        WNBD_LOG_ERROR("%p has no ScsiDeviceExtension. PathId = %d. TargetId = %d. LUN = %d",
-                       Device, Srb->PathId, Srb->TargetId, Srb->Lun);
-        goto Exit;
-    }
-    if (WNBD_DEV_INFO(Device)->HardTerminateDevice) {
+    if (Device->HardTerminateDevice) {
         WNBD_LOG_WARN("%p is marked for deletion. PathId = %d. TargetId = %d. LUN = %d",
                       Device, Srb->PathId, Srb->TargetId, Srb->Lun);
         goto Exit;
     }
 
-    InterlockedIncrement64(&WNBD_DEV_INFO(Device)->Stats.OutstandingIOCount);
-    Status = WnbdHandleSrbOperation(DeviceExtension, Device->ScsiDeviceExtension, Srb);
+    InterlockedIncrement64(&Device->Stats.OutstandingIOCount);
+    Status = WnbdHandleSrbOperation((PWNBD_EXTENSION)DeviceExtension, Device, Srb);
 
     if(STATUS_PENDING == Status) {
         *Complete = FALSE;
         SrbStatus = SRB_STATUS_PENDING;
     } else {
-        InterlockedDecrement64(&WNBD_DEV_INFO(Device)->Stats.OutstandingIOCount);
+        InterlockedDecrement64(&Device->Stats.OutstandingIOCount);
         SrbStatus = Srb->SrbStatus;
     }
 

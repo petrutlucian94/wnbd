@@ -6,8 +6,7 @@
 
 #include "debug.h"
 #include "driver.h"
-#include "driver_extension.h"
-#include "srbhelper.h"
+#include "srb_helper.h"
 #include "scsi_driver_extensions.h"
 #include "scsi_function.h"
 #include "scsi_trace.h"
@@ -172,7 +171,7 @@ WnbdHwFindAdapter(PVOID DeviceExtension,
         goto CleanAdapter;
     }
 
-    Status = WnbdInitializeGlobalInformation(DeviceExtension, &Ext->GlobalInformation);
+    WnbdInitScsiIds();
 
     if (!NT_SUCCESS(Status)) {
         goto Exit;
@@ -250,10 +249,10 @@ WnbdHwProcessServiceRequest(PVOID DeviceExtension,
 
     PIO_STACK_LOCATION IoLocation = IoGetCurrentIrpStackLocation((PIRP)Irp);
     NTSTATUS Status = STATUS_INVALID_DEVICE_REQUEST;
-    PWNBD_EXTENSION	Ext = (PWNBD_EXTENSION) DeviceExtension;
 
     if (IRP_MJ_DEVICE_CONTROL == IoLocation->MajorFunction) {
-        Status = WnbdParseUserIOCTL(Ext->GlobalInformation, (PIRP)Irp);
+        Status = WnbdParseUserIOCTL((PWNBD_EXTENSION) DeviceExtension,
+                                    (PIRP)Irp);
     }
 
     if (STATUS_PENDING != Status) {

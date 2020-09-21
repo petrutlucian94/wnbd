@@ -24,12 +24,12 @@ typedef struct _SRB_QUEUE_ELEMENT {
 } SRB_QUEUE_ELEMENT, * PSRB_QUEUE_ELEMENT;
 
 VOID
-DrainDeviceQueue(_In_ PSCSI_DEVICE_INFORMATION DeviceInformation,
+DrainDeviceQueue(_In_ PWNBD_SCSI_DEVICE Device,
                  _In_ BOOLEAN SubmittedRequests);
 VOID
-AbortSubmittedRequests(_In_ PSCSI_DEVICE_INFORMATION DeviceInformation);
+AbortSubmittedRequests(_In_ PWNBD_SCSI_DEVICE Device);
 VOID
-CompleteRequest(_In_ PSCSI_DEVICE_INFORMATION DeviceInformation,
+CompleteRequest(_In_ PWNBD_SCSI_DEVICE Device,
                 _In_ PSRB_QUEUE_ELEMENT Element,
                 _In_ BOOLEAN FreeElement);
 
@@ -37,13 +37,23 @@ VOID
 WnbdDeviceCleanerThread(_In_ PVOID Context);
 
 VOID
-WnbdDeleteScsiInformation(_In_ PVOID ScsiInformation);
+WnbdCleanupDevice(_In_ PWNBD_SCSI_DEVICE Device);
 
 PWNBD_SCSI_DEVICE
-WnbdFindDevice(_In_ PWNBD_EXTENSION DeviceExtension,
-               _In_ UCHAR PathId,
-               _In_ UCHAR TargetId,
-               _In_ UCHAR Lun);
+WnbdFindDeviceByAddr(
+    _In_ PWNBD_EXTENSION DeviceExtension,
+    _In_ UCHAR PathId,
+    _In_ UCHAR TargetId,
+    _In_ UCHAR Lun);
+PWNBD_SCSI_DEVICE
+WnbdFindDeviceByConnId(
+    _In_ PWNBD_EXTENSION DeviceExtension,
+    _In_ UINT64 ConnectionId);
+PWNBD_SCSI_DEVICE
+WnbdFindDeviceByInstanceName(
+    _In_ PWNBD_EXTENSION DeviceExtension,
+    _In_ PCHAR InstanceName);
+
 
 VOID
 WnbdDeviceRequestThread(_In_ PVOID Context);
@@ -54,12 +64,12 @@ WnbdDeviceReplyThread(_In_ PVOID Context);
 BOOLEAN
 IsReadSrb(_In_ PSCSI_REQUEST_BLOCK Srb);
 VOID
-WnbdProcessDeviceThreadReplies(_In_ PSCSI_DEVICE_INFORMATION DeviceInformation);
-VOID DisconnectSocket(_In_ PSCSI_DEVICE_INFORMATION DeviceInformation);
-VOID CloseSocket(_In_ PSCSI_DEVICE_INFORMATION DeviceInformation);
+WnbdProcessDeviceThreadReplies(_In_ PWNBD_SCSI_DEVICE Device);
+VOID DisconnectSocket(_In_ PWNBD_SCSI_DEVICE Device);
+VOID CloseSocket(_In_ PWNBD_SCSI_DEVICE Device);
 int ScsiOpToNbdReqType(_In_ int ScsiOp);
 BOOLEAN ValidateScsiRequest(
-    _In_ PSCSI_DEVICE_INFORMATION DeviceInformation,
+    _In_ PWNBD_SCSI_DEVICE Device,
     _In_ PSRB_QUEUE_ELEMENT Element);
 
 

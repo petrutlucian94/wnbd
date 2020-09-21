@@ -8,10 +8,9 @@
 #define USERSPACE_H 1
 
 #include "driver.h"
-#include "driver_extension.h"
-#include "scsi_driver_extensions.h"
 #include "nbd_protocol.h"
 #include "wnbd_ioctl.h"
+#include "scsi_driver_extensions.h"
 
 // TODO: make this configurable. 1024 is the Storport default.
 #define WNBD_MAX_IN_FLIGHT_REQUESTS 1024
@@ -22,28 +21,20 @@
 #define WNBD_CONNECTION_ID_FROM_ADDR(PathId, TargetId, Lun) \
     ((1 << 24 | (PathId) << 16) | ((TargetId) << 8) | (Lun))
 
-// TODO: consider merging WNBD_LU_EXTENSION, WNBD_SCSI_DEVICE and SCSI_DEVICE_INFORMATION.
-#define WNBD_DEV_INFO(Device) ((PSCSI_DEVICE_INFORMATION)Device->ScsiDeviceExtension)
-
-typedef struct _USER_ENTRY {
-    LIST_ENTRY                         ListEntry;
-    struct _SCSI_DEVICE_INFORMATION*   ScsiInformation;
-    USHORT                             BusIndex;
-    USHORT                             TargetIndex;
-    USHORT                             LunIndex;
-    BOOLEAN                            Connected;
-    WNBD_PROPERTIES                    Properties;
-    WNBD_CONNECTION_ID                 ConnectionId;
-} USER_ENTRY, *PUSER_ENTRY;
-
-typedef struct _SCSI_DEVICE_INFORMATION
+typedef struct _WNBD_SCSI_DEVICE
 {
-    PWNBD_SCSI_DEVICE           Device;
-    PGLOBAL_INFORMATION         GlobalInformation;
+    LIST_ENTRY                  ListEntry;
+
+    BOOLEAN                     Connected;
+    WNBD_PROPERTIES             Properties;
+    WNBD_CONNECTION_ID          ConnectionId;
+
+    USHORT                      Bus;
+    USHORT                      Target;
+    USHORT                      Lun;
 
     PINQUIRYDATA                InquiryData;
 
-    PUSER_ENTRY                 UserEntry;
     INT                         Socket;
     INT                         SocketToClose;
     ERESOURCE                   SocketLock;
@@ -67,41 +58,28 @@ typedef struct _SCSI_DEVICE_INFORMATION
     // especially important for IO dispatching.
     EX_RUNDOWN_REF              RundownProtection;
 
-
     WNBD_DRV_STATS              Stats;
     PVOID                       ReadPreallocatedBuffer;
     ULONG                       ReadPreallocatedBufferLength;
     PVOID                       WritePreallocatedBuffer;
     ULONG                       WritePreallocatedBufferLength;
-} SCSI_DEVICE_INFORMATION, *PSCSI_DEVICE_INFORMATION;
+} WNBD_SCSI_DEVICE, *PWNBD_SCSI_DEVICE;
 
 NTSTATUS
-WnbdParseUserIOCTL(_In_ PVOID GlobalHandle,
+WnbdParseUserIOCTL(_In_ PWNBD_EXTENSION DeviceExtension,
                    _In_ PIRP Irp);
 
-BOOLEAN
-WnbdFindConnection(_In_ PGLOBAL_INFORMATION GInfo,
-                   _In_ PCHAR InstanceName,
-                   _Maybenull_ PUSER_ENTRY* Entry);
-
-PUSER_ENTRY
-WnbdFindConnectionEx(_In_ PGLOBAL_INFORMATION GInfo,
-                     _In_ UINT64 ConnectionId);
-
 NTSTATUS
-WnbdCreateConnection(_In_ PGLOBAL_INFORMATION GInfo,
+WnbdCreateConnection(_In_ PWNBD_EXTENSION DeviceExtension,
                      _In_ PWNBD_PROPERTIES Properties,
                      _In_ PWNBD_CONNECTION_INFO ConnectionInfo);
 
 NTSTATUS
-WnbdDeleteConnectionEntry(_In_ PUSER_ENTRY Entry);
-
-NTSTATUS
-WnbdEnumerateActiveConnections(_In_ PGLOBAL_INFORMATION GInfo,
+WnbdEnumerateActiveConnections(_In_ PWNBD_EXTENSION DeviceExtension,
                                _In_ PIRP Irp);
 
 NTSTATUS
-WnbdDeleteConnection(_In_ PGLOBAL_INFORMATION GInfo,
+WnbdDeleteConnection(_In_ PWNBD_EXTENSION DeviceExtension,
                      _In_ PCHAR InstanceName);
 
 VOID
