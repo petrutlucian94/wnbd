@@ -39,20 +39,33 @@ WnbdDeviceCleanerThread(_In_ PVOID Context);
 VOID
 WnbdCleanupDevice(_In_ PWNBD_SCSI_DEVICE Device);
 
+
+// Increments the device rundown protection reference count, preventing
+// it from being cleaned up.
+BOOLEAN
+WnbdAcquireDevice(_In_ PWNBD_SCSI_DEVICE Device);
+// Decrements the reference count. All "WnbdAcquireDevice" calls must
+// be paired with a "WnbdReleaseDevice" call.
+VOID
+WnbdReleaseDevice(_In_ PWNBD_SCSI_DEVICE Device);
+
 PWNBD_SCSI_DEVICE
 WnbdFindDeviceByAddr(
     _In_ PWNBD_EXTENSION DeviceExtension,
     _In_ UCHAR PathId,
     _In_ UCHAR TargetId,
-    _In_ UCHAR Lun);
+    _In_ UCHAR Lun,
+    _In_ BOOLEAN Acquire);
 PWNBD_SCSI_DEVICE
 WnbdFindDeviceByConnId(
     _In_ PWNBD_EXTENSION DeviceExtension,
-    _In_ UINT64 ConnectionId);
+    _In_ UINT64 ConnectionId,
+    _In_ BOOLEAN Acquire);
 PWNBD_SCSI_DEVICE
 WnbdFindDeviceByInstanceName(
     _In_ PWNBD_EXTENSION DeviceExtension,
-    _In_ PCHAR InstanceName);
+    _In_ PCHAR InstanceName,
+    _In_ BOOLEAN Acquire);
 
 
 VOID

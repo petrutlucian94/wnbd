@@ -185,7 +185,8 @@ WnbdCreateConnection(PWNBD_EXTENSION DeviceExtension,
     INT Sock = -1;
     PINQUIRYDATA InquiryData = NULL;
 
-    if (WnbdFindDeviceByInstanceName(DeviceExtension, Properties->InstanceName)) {
+    if (WnbdFindDeviceByInstanceName(
+        DeviceExtension, Properties->InstanceName, FALSE)) {
         Status = STATUS_OBJECT_NAME_COLLISION;
         goto Exit;
     }
@@ -284,13 +285,9 @@ WnbdCreateConnection(PWNBD_EXTENSION DeviceExtension,
     ConnectionInfo->Lun = Device->Lun;
     ConnectionInfo->ConnectionId = Device->ConnectionId;
 
-    KeEnterCriticalRegion();
-    ExAcquireResourceSharedLite(&DeviceExtension->DeviceResourceLock, TRUE);
-
-    InsertTailList(&DeviceExtension->DeviceList, &Device->ListEntry);
-
-    ExReleaseResourceLite(&DeviceExtension->DeviceResourceLock);
-    KeLeaveCriticalRegion();
+    ExInterlockedInsertTailList(
+        &DeviceExtension->DeviceList, &Device->ListEntry,
+        &DeviceExtension->DeviceListLock);
 
     InterlockedIncrement(&DeviceExtension->DeviceCount);
     StorPortNotification(BusChangeDetected, DeviceExtension, 0);
@@ -370,12 +367,9 @@ WnbdDeleteConnection(PWNBD_EXTENSION DeviceExtension,
     ASSERT(InstanceName);
     PWNBD_SCSI_DEVICE Device = NULL;
 
-    Device = WnbdFindDeviceByInstanceName(DeviceExtension, InstanceName);
+    Device = WnbdFindDeviceByInstanceName(DeviceExtension, InstanceName, FALSE);
     if (!Device) {
         WNBD_LOG_ERROR("Could not find connection to delete");
-        return STATUS_OBJECT_NAME_NOT_FOUND;
-    }
-    if (NULL == Device) {
         return STATUS_OBJECT_NAME_NOT_FOUND;
     }
     NTSTATUS Status = STATUS_UNSUCCESSFUL;
@@ -439,6 +433,8 @@ WnbdEnumerateActiveConnections(PWNBD_EXTENSION DeviceExtension, PIRP Irp)
     OutList->Count = 0;
     OutList->ElementSize = sizeof(WNBD_CONNECTION_INFO);
 
+    KIRQL Irql = { 0 };
+    KeAcquireSpinLock(&DeviceExtension->DeviceListLock, &Irql);
     while ((CurrentEntry != (PWNBD_SCSI_DEVICE) &DeviceExtension->DeviceList.Flink) && Remaining) {
         OutEntry = &OutList->Connections[OutList->Count];
         RtlZeroMemory(OutEntry, sizeof(WNBD_CONNECTION_INFO));
@@ -453,6 +449,7 @@ WnbdEnumerateActiveConnections(PWNBD_EXTENSION DeviceExtension, PIRP Irp)
 
         CurrentEntry = (PWNBD_SCSI_DEVICE)CurrentEntry->ListEntry.Flink;
     }
+    KeReleaseSpinLock(&DeviceExtension->DeviceListLock, Irql);
 
     if (CurrentEntry == (PWNBD_SCSI_DEVICE) &DeviceExtension->DeviceList.Flink) {
         Status = STATUS_SUCCESS;
@@ -478,9 +475,7 @@ WnbdParseUserIOCTL(PWNBD_EXTENSION DeviceExtension,
     PIO_STACK_LOCATION IoLocation = IoGetCurrentIrpStackLocation(Irp);
     NTSTATUS Status = STATUS_SUCCESS;
 
-    BOOLEAN RPAcquired = FALSE;
-    KIRQL Irql;
-
+    PWNBD_SCSI_DEVICE Device = NULL;
     DWORD Ioctl = IoLocation->Parameters.DeviceIoControl.IoControlCode;
     WNBD_LOG_LOUD("DeviceIoControl = 0x%x.", Ioctl);
 
@@ -550,7 +545,10 @@ WnbdParseUserIOCTL(PWNBD_EXTENSION DeviceExtension,
             }
         }
 
-        KeAcquireSpinLock(&DeviceExtension->DeviceListLock, &Irql);
+        KeEnterCriticalRegion();
+        ExAcquireResourceSharedLite(&DeviceExtension->DeviceResourceLock, TRUE);
+        KeLeaveCriticalRegion();
+
         WNBD_LOG_INFO("Mapping disk. Name: %s, Serial=%s, BC=%llu, BS=%lu, Pid=%d",
                       Props.InstanceName, Props.SerialNumber,
                       Props.BlockCount, Props.BlockSize, Props.Pid);
@@ -565,7 +563,8 @@ WnbdParseUserIOCTL(PWNBD_EXTENSION DeviceExtension,
         WNBD_LOG_LOUD("Mapped disk. Name: %s, connection id: %llu",
                       Props.InstanceName, ConnectionInfo.ConnectionId);
 
-        KeReleaseSpinLock(&DeviceExtension->DeviceListLock, Irql);
+        ExReleaseResourceLite(&DeviceExtension->DeviceResourceLock);
+        KeLeaveCriticalRegion();
         break;
 
     case IOCTL_WNBD_REMOVE:
@@ -586,21 +585,11 @@ WnbdParseUserIOCTL(PWNBD_EXTENSION DeviceExtension,
             break;
         }
 
-        KeAcquireSpinLock(&DeviceExtension->DeviceListLock, &Irql);
-        if (!WnbdFindDeviceByInstanceName(DeviceExtension, RmCmd->InstanceName)) {
-            KeReleaseSpinLock(&DeviceExtension->DeviceListLock, Irql);
-            Status = STATUS_OBJECT_NAME_NOT_FOUND;
-            WNBD_LOG_ERROR("IOCTL_WNBD_REMOVE: Connection does not exist");
-            break;
-        }
-        WNBD_LOG_LOUD("IOCTL_WNBDVM_UNMAP DeleteConnection");
         Status = WnbdDeleteConnection(DeviceExtension, RmCmd->InstanceName);
-        KeReleaseSpinLock(&DeviceExtension->DeviceListLock, Irql);
         break;
 
      case IOCTL_WNBD_LIST:
         WNBD_LOG_LOUD("IOCTL_WNBD_LIST");
-        KeAcquireSpinLock(&DeviceExtension->DeviceListLock, &Irql);
         DWORD RequiredBuffSize = (
             DeviceExtension->DeviceCount * sizeof(WNBD_CONNECTION_INFO))
             + sizeof(WNBD_CONNECTION_LIST);
@@ -610,11 +599,9 @@ WnbdParseUserIOCTL(PWNBD_EXTENSION DeviceExtension,
         {
             WNBD_LOG_ERROR("IOCTL_WNBD_LIST: Bad output buffer");
             Irp->IoStatus.Information = RequiredBuffSize;
-            KeReleaseSpinLock(&DeviceExtension->DeviceListLock, Irql);
             break;
         }
         Status = WnbdEnumerateActiveConnections(DeviceExtension, Irp);
-        KeReleaseSpinLock(&DeviceExtension->DeviceListLock, Irql);
         break;
 
     case IOCTL_WNBD_RELOAD_CONFIG:
@@ -647,19 +634,16 @@ WnbdParseUserIOCTL(PWNBD_EXTENSION DeviceExtension,
             break;
         }
 
-        KeAcquireSpinLock(&DeviceExtension->DeviceListLock, &Irql);
         if (!Irp->AssociatedIrp.SystemBuffer ||
                 CHECK_O_LOCATION(IoLocation, WNBD_DRV_STATS)) {
             WNBD_LOG_ERROR("WNBD_STATS: Bad output buffer");
             Status = STATUS_BUFFER_OVERFLOW;
-            KeReleaseSpinLock(&DeviceExtension->DeviceListLock, Irql);
             break;
         }
 
-        PWNBD_SCSI_DEVICE Device = NULL;
-        Device = WnbdFindDeviceByInstanceName(DeviceExtension, StatsCmd->InstanceName);
+        Device = WnbdFindDeviceByInstanceName(
+            DeviceExtension, StatsCmd->InstanceName, TRUE);
         if (!Device) {
-            KeReleaseSpinLock(&DeviceExtension->DeviceListLock, Irql);
             Status = STATUS_OBJECT_NAME_NOT_FOUND;
             WNBD_LOG_ERROR("WNBD_STATS: Connection does not exist");
             break;
@@ -668,10 +652,9 @@ WnbdParseUserIOCTL(PWNBD_EXTENSION DeviceExtension,
         PWNBD_DRV_STATS OutStatus = (
             PWNBD_DRV_STATS) Irp->AssociatedIrp.SystemBuffer;
         RtlCopyMemory(OutStatus, &Device->Stats, sizeof(WNBD_DRV_STATS));
+        WnbdReleaseDevice(Device);
 
         Irp->IoStatus.Information = sizeof(WNBD_DRV_STATS);
-        KeReleaseSpinLock(&DeviceExtension->DeviceListLock, Irql);
-
         Status = STATUS_SUCCESS;
         break;
 
@@ -689,18 +672,9 @@ WnbdParseUserIOCTL(PWNBD_EXTENSION DeviceExtension,
             break;
         }
 
-        KeAcquireSpinLock(&DeviceExtension->DeviceListLock, &Irql);
-        Device = WnbdFindDeviceByConnId(DeviceExtension, ReqCmd->ConnectionId);
-        // If we can't acquire the rundown protection, it means that the device
-        // is being deallocated. Acquiring it guarantees that it won't be deallocated
-        // while we're dispatching requests. This doesn't prevent other requests from
-        // acquiring it at the same time, which will increase its counter.
-        if (Device) {
-            RPAcquired = ExAcquireRundownProtection(&Device->RundownProtection);
-        }
-        KeReleaseSpinLock(&DeviceExtension->DeviceListLock, Irql);
-
-        if (!Device || !RPAcquired) {
+        Device = WnbdFindDeviceByConnId(
+            DeviceExtension, ReqCmd->ConnectionId, TRUE);
+        if (!Device) {
             Status = STATUS_INVALID_HANDLE;
             WNBD_LOG_ERROR(
                 "IOCTL_WNBD_FETCH_REQ: Could not fetch request, invalid connection id: %d.",
@@ -713,9 +687,7 @@ WnbdParseUserIOCTL(PWNBD_EXTENSION DeviceExtension,
         WNBD_LOG_LOUD("Request dispatch status: %d. Request type: %d Request handle: %llx",
                       Status, ReqCmd->Request.RequestType, ReqCmd->Request.RequestHandle);
 
-        KeEnterCriticalRegion();
-        ExReleaseRundownProtection(&Device->RundownProtection);
-        KeLeaveCriticalRegion();
+        WnbdReleaseDevice(Device);
         break;
 
     case IOCTL_WNBD_SEND_RSP:
@@ -728,19 +700,8 @@ WnbdParseUserIOCTL(PWNBD_EXTENSION DeviceExtension,
             break;
         }
 
-        KeAcquireSpinLock(&DeviceExtension->DeviceListLock, &Irql);
-        Device = WnbdFindDeviceByConnId(DeviceExtension, RspCmd->ConnectionId);
-        // If we can't acquire the rundown protection, it means that the device
-        // is being deallocated. Acquiring it guarantees that it won't be deallocated
-        // while we're dispatching requests. This doesn't prevent other requests from
-        // acquiring it at the same time, which will increase its counter.
-        if (Device) {
-            RPAcquired = ExAcquireRundownProtection(
-                &Device->RundownProtection);
-        }
-        KeReleaseSpinLock(&DeviceExtension->DeviceListLock, Irql);
-
-        if (!Device || !RPAcquired) {
+        Device = WnbdFindDeviceByConnId(DeviceExtension, RspCmd->ConnectionId, TRUE);
+        if (!Device) {
             Status = STATUS_INVALID_HANDLE;
             WNBD_LOG_ERROR(
                 "IOCTL_WNBD_SEND_RSP: Could not fetch request, invalid connection id: %d.",
@@ -751,9 +712,7 @@ WnbdParseUserIOCTL(PWNBD_EXTENSION DeviceExtension,
         Status = WnbdHandleResponse(Irp, Device, RspCmd);
         WNBD_LOG_LOUD("Reply handling status: %d.", Status);
 
-        KeEnterCriticalRegion();
-        ExReleaseRundownProtection(&Device->RundownProtection);
-        KeLeaveCriticalRegion();
+        WnbdReleaseDevice(Device);
         break;
 
     case IOCTL_WNBD_VERSION:

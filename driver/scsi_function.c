@@ -24,9 +24,6 @@ UCHAR DrainDeviceQueues(PVOID DeviceExtension,
 
     UCHAR SrbStatus = SRB_STATUS_NO_DEVICE;
     PWNBD_SCSI_DEVICE Device;
-    KIRQL Irql;
-    KSPIN_LOCK DevLock = ((PWNBD_EXTENSION)DeviceExtension)->DeviceListLock;
-    KeAcquireSpinLock(&DevLock, &Irql);
 
     if (SrbGetCdb(Srb)) {
         BYTE CdbValue = SrbGetCdb(Srb)->AsByte[0];
@@ -36,7 +33,7 @@ UCHAR DrainDeviceQueues(PVOID DeviceExtension,
     }
 
     Device = WnbdFindDeviceByAddr(
-        DeviceExtension, Srb->PathId, Srb->TargetId, Srb->Lun);
+        DeviceExtension, Srb->PathId, Srb->TargetId, Srb->Lun, TRUE);
     if (NULL == Device) {
         WNBD_LOG_INFO("Could not find device PathId: %d TargetId: %d LUN: %d",
             Srb->PathId, Srb->TargetId, Srb->Lun);
@@ -46,11 +43,10 @@ UCHAR DrainDeviceQueues(PVOID DeviceExtension,
     DrainDeviceQueue(Device, FALSE);
     AbortSubmittedRequests(Device);
 
+    WnbdReleaseDevice(Device);
     SrbStatus = SRB_STATUS_SUCCESS;
 
 Exit:
-    KeReleaseSpinLock(&DevLock, Irql);
-
     WNBD_LOG_LOUD(": Exit");
     return SrbStatus;
 }
@@ -125,9 +121,6 @@ WnbdExecuteScsiFunction(PVOID DeviceExtension,
     NTSTATUS Status = STATUS_SUCCESS;
     UCHAR SrbStatus = SRB_STATUS_NO_DEVICE;
     PWNBD_SCSI_DEVICE Device;
-    KIRQL Irql;
-    KSPIN_LOCK DevLock = ((PWNBD_EXTENSION)DeviceExtension)->DeviceListLock;
-    KeAcquireSpinLock(&DevLock, &Irql);
     *Complete = TRUE;
 
     if (SrbGetCdb(Srb)) {
@@ -138,7 +131,7 @@ WnbdExecuteScsiFunction(PVOID DeviceExtension,
     }
 
     Device = WnbdFindDeviceByAddr(
-        (PWNBD_EXTENSION)DeviceExtension, Srb->PathId, Srb->TargetId, Srb->Lun);
+        (PWNBD_EXTENSION)DeviceExtension, Srb->PathId, Srb->TargetId, Srb->Lun, TRUE);
     if (NULL == Device) {
         WNBD_LOG_INFO("Could not find device PathId: %d TargetId: %d LUN: %d",
                       Srb->PathId, Srb->TargetId, Srb->Lun);
@@ -162,9 +155,10 @@ WnbdExecuteScsiFunction(PVOID DeviceExtension,
     }
 
 Exit:
-    KeReleaseSpinLock(&DevLock, Irql);
-    WNBD_LOG_LOUD(": Exit");
+    if (Device)
+        WnbdReleaseDevice(Device);
 
+    WNBD_LOG_LOUD(": Exit");
     return SrbStatus;
 }
 

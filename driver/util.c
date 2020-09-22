@@ -121,10 +121,8 @@ WnbdDeleteDevices(_In_ PWNBD_EXTENSION Ext,
     ASSERT(Ext);
     PWNBD_SCSI_DEVICE Device = NULL;
     PLIST_ENTRY Link, Next;
-    KeEnterCriticalRegion();
     // TODO: consider using one supervisor thread per device and reference counting
     // (e.g. rundown protection) to help coordination.
-    ExAcquireResourceSharedLite(&Ext->DeviceResourceLock, TRUE);
     // TODO: keeping a spinlock for so long is NOT safe. We MUST change switch reference
     // counting in a subsequent commit.
     KIRQL Irql = { 0 };
@@ -150,8 +148,6 @@ WnbdDeleteDevices(_In_ PWNBD_EXTENSION Ext,
         KsDestroy();
     }
     KeReleaseSpinLock(&Ext->DeviceListLock, Irql);
-    ExReleaseResourceLite(&Ext->DeviceResourceLock);
-    KeLeaveCriticalRegion();
 
     WNBD_LOG_LOUD(": Exit");
 }
@@ -175,16 +171,42 @@ WnbdDeviceCleanerThread(_In_ PVOID Context)
     PsTerminateSystemThread(STATUS_SUCCESS);
 }
 
+BOOLEAN
+WnbdAcquireDevice(_In_ PWNBD_SCSI_DEVICE Device)
+{
+    // TODO: limit the scopes of critical regions.
+    BOOLEAN Acquired = FALSE;
+
+    KeEnterCriticalRegion();
+    if (Device)
+        Acquired = ExAcquireRundownProtection(&Device->RundownProtection);
+    KeLeaveCriticalRegion();
+    return Acquired;
+}
+
+VOID
+WnbdReleaseDevice(_In_ PWNBD_SCSI_DEVICE Device)
+{
+    KeEnterCriticalRegion();
+    if (Device)
+        ExReleaseRundownProtection(&Device->RundownProtection);
+    KeLeaveCriticalRegion();
+}
+
+// The returned device must be subsequently relased using WnbdReleaseDevice.
 PWNBD_SCSI_DEVICE
 WnbdFindDeviceByAddr(
     _In_ PWNBD_EXTENSION DeviceExtension,
     _In_ UCHAR PathId,
     _In_ UCHAR TargetId,
-    _In_ UCHAR Lun)
+    _In_ UCHAR Lun,
+    _In_ BOOLEAN Acquire)
 {
     WNBD_LOG_LOUD(": Enter");
     ASSERT(DeviceExtension);
 
+    KIRQL Irql = { 0 };
+    KeAcquireSpinLock(&DeviceExtension->DeviceListLock, &Irql);
     PWNBD_SCSI_DEVICE Device = NULL;
     for (PLIST_ENTRY Entry = DeviceExtension->DeviceList.Flink;
          Entry != &DeviceExtension->DeviceList; Entry = Entry->Flink)
@@ -194,16 +216,13 @@ WnbdFindDeviceByAddr(
             && Device->Target == TargetId
             && Device->Lun == Lun)
         {
-            // TODO: trigger the device cleaner when setting "HardTerminateDevice"
-            // or even consider dropping the device cleaner and using the same context.
-            if (Device->HardTerminateDevice) {
-                KeSetEvent(&DeviceExtension->DeviceCleanerEvent,
-                           IO_DISK_INCREMENT, FALSE);
-            }
+            if (Acquire && !WnbdAcquireDevice(Device))
+                Device = NULL;
             break;
         }
         Device = NULL;
     }
+    KeReleaseSpinLock(&DeviceExtension->DeviceListLock, Irql);
 
     WNBD_LOG_LOUD(": Exit");
     return Device;
@@ -213,21 +232,27 @@ WnbdFindDeviceByAddr(
 PWNBD_SCSI_DEVICE
 WnbdFindDeviceByConnId(
     _In_ PWNBD_EXTENSION DeviceExtension,
-    _In_ UINT64 ConnectionId)
+    _In_ UINT64 ConnectionId,
+    _In_ BOOLEAN Acquire)
 {
     WNBD_LOG_LOUD(": Enter");
     ASSERT(DeviceExtension);
 
+    KIRQL Irql = { 0 };
+    KeAcquireSpinLock(&DeviceExtension->DeviceListLock, &Irql);
     PWNBD_SCSI_DEVICE Device = NULL;
     for (PLIST_ENTRY Entry = DeviceExtension->DeviceList.Flink;
          Entry != &DeviceExtension->DeviceList; Entry = Entry->Flink)
     {
         Device = (PWNBD_SCSI_DEVICE) CONTAINING_RECORD(Entry, WNBD_SCSI_DEVICE, ListEntry);
         if (Device->ConnectionId == ConnectionId) {
+            if (Acquire && !WnbdAcquireDevice(Device))
+                Device = NULL;
             break;
         }
         Device = NULL;
     }
+    KeReleaseSpinLock(&DeviceExtension->DeviceListLock, Irql);
 
     WNBD_LOG_LOUD(": Exit");
     return Device;
@@ -236,21 +261,27 @@ WnbdFindDeviceByConnId(
 PWNBD_SCSI_DEVICE
 WnbdFindDeviceByInstanceName(
     _In_ PWNBD_EXTENSION DeviceExtension,
-    _In_ PCHAR InstanceName)
+    _In_ PCHAR InstanceName,
+    _In_ BOOLEAN Acquire)
 {
     WNBD_LOG_LOUD(": Enter");
     ASSERT(DeviceExtension);
 
+    KIRQL Irql = { 0 };
+    KeAcquireSpinLock(&DeviceExtension->DeviceListLock, &Irql);
     PWNBD_SCSI_DEVICE Device = NULL;
     for (PLIST_ENTRY Entry = DeviceExtension->DeviceList.Flink;
          Entry != &DeviceExtension->DeviceList; Entry = Entry->Flink)
     {
         Device = (PWNBD_SCSI_DEVICE) CONTAINING_RECORD(Entry, WNBD_SCSI_DEVICE, ListEntry);
         if (!strcmp((CONST CHAR*)&Device->Properties.InstanceName, InstanceName)) {
+            if (Acquire && !WnbdAcquireDevice(Device))
+                Device = NULL;
             break;
         }
         Device = NULL;
     }
+    KeReleaseSpinLock(&DeviceExtension->DeviceListLock, Irql);
 
     WNBD_LOG_LOUD(": Exit");
     return Device;
