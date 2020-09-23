@@ -8,6 +8,7 @@
 #define SCSI_DRIVER_EXTENSIONS_H 1
 
 #include "common.h"
+#include "wnbd_ioctl.h"
 
 typedef struct _WNBD_EXTENSION {
     SCSI_ADAPTER_CONTROL_TYPE         ScsiAdapterControlState;
@@ -15,13 +16,58 @@ typedef struct _WNBD_EXTENSION {
     UNICODE_STRING                    DeviceInterface;
     LIST_ENTRY                        DeviceList;
     KSPIN_LOCK                        DeviceListLock;
-    LONG                             DeviceCount;
+    LONG                              DeviceCount;
     ERESOURCE                         DeviceResourceLock;
 
-    HANDLE                            DeviceCleaner;
-    KEVENT                            DeviceCleanerEvent;
-    BOOLEAN                           StopDeviceCleaner;
+    EX_RUNDOWN_REF                    RundownProtection;
+    KEVENT                            GlobalDeviceRemovalEvent;
 } WNBD_EXTENSION, *PWNBD_EXTENSION;
+
+typedef struct _WNBD_SCSI_DEVICE
+{
+    LIST_ENTRY                  ListEntry;
+    PWNBD_EXTENSION             DeviceExtension;
+
+    BOOLEAN                     Connected;
+    WNBD_PROPERTIES             Properties;
+    WNBD_CONNECTION_ID          ConnectionId;
+
+    USHORT                      Bus;
+    USHORT                      Target;
+    USHORT                      Lun;
+
+    PINQUIRYDATA                InquiryData;
+
+    INT                         NbdSocket;
+    INT                         SocketToClose;
+    ERESOURCE                   SocketLock;
+
+    // TODO: rename as PendingReqListHead
+    LIST_ENTRY                  RequestListHead;
+    KSPIN_LOCK                  RequestListLock;
+
+    // TODO: rename as SubmittedReqListHead
+    LIST_ENTRY                  ReplyListHead;
+    KSPIN_LOCK                  ReplyListLock;
+
+    KSEMAPHORE                  DeviceEvent;
+    PVOID                       DeviceRequestThread;
+    PVOID                       DeviceReplyThread;
+    PVOID                       DeviceMonitorThread;
+    BOOLEAN                     HardTerminateDevice;
+    BOOLEAN                     SoftTerminateDevice;
+    KEVENT                      TerminateEvent;
+    // The rundown protection provides device reference counting, preventing
+    // it from being deallocated while still being accessed. This is
+    // especially important for IO dispatching.
+    EX_RUNDOWN_REF              RundownProtection;
+
+    WNBD_DRV_STATS              Stats;
+    PVOID                       ReadPreallocatedBuffer;
+    ULONG                       ReadPreallocatedBufferLength;
+    PVOID                       WritePreallocatedBuffer;
+    ULONG                       WritePreallocatedBufferLength;
+} WNBD_SCSI_DEVICE, *PWNBD_SCSI_DEVICE;
 
 SCSI_ADAPTER_CONTROL_STATUS
 WnbdHwAdapterControl(_In_ PVOID DeviceExtension,

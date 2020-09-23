@@ -81,94 +81,20 @@ VOID AbortSubmittedRequests(_In_ PWNBD_SCSI_DEVICE Device)
 }
 
 VOID
-WnbdCleanupDevice(_In_ PWNBD_SCSI_DEVICE Device)
+WnbdCleanupAllDevices(_In_ PWNBD_EXTENSION DeviceExtension)
 {
     WNBD_LOG_LOUD(": Enter");
-    ASSERT(Device);
-    KeEnterCriticalRegion();
+    KeSetEvent(&DeviceExtension->GlobalDeviceRemovalEvent, IO_NO_INCREMENT, FALSE);
 
-    DrainDeviceQueue(Device, FALSE);
-    DrainDeviceQueue(Device, TRUE);
+    // The rundown protection is a device reference count. We're going to wait
+    // for them to be removed after signaling the global device removal event.
+    ExWaitForRundownProtectionRelease(&DeviceExtension->RundownProtection);
 
-    if (Device->InquiryData) {
-        ExFreePool(Device->InquiryData);
-        Device->InquiryData = NULL;
-    }
-
-    CloseSocket(Device);
-    ExDeleteResourceLite(&Device->SocketLock);
-
-    if (Device->ReadPreallocatedBuffer) {
-        ExFreePool(Device->ReadPreallocatedBuffer);
-        Device->ReadPreallocatedBuffer = NULL;
-    }
-    if (Device->WritePreallocatedBuffer) {
-        ExFreePool(Device->WritePreallocatedBuffer);
-        Device->WritePreallocatedBuffer = NULL;
-    }
-
-    ExFreePool(Device);
-
-    KeLeaveCriticalRegion();
-    WNBD_LOG_LOUD(": Exit");
-}
-
-VOID
-WnbdDeleteDevices(_In_ PWNBD_EXTENSION Ext,
-                  _In_ BOOLEAN All)
-{
-    WNBD_LOG_LOUD(": Enter");
-    ASSERT(Ext);
-    PWNBD_SCSI_DEVICE Device = NULL;
-    PLIST_ENTRY Link, Next;
-    // TODO: consider using one supervisor thread per device and reference counting
-    // (e.g. rundown protection) to help coordination.
-    // TODO: keeping a spinlock for so long is NOT safe. We MUST change switch reference
-    // counting in a subsequent commit.
-    KIRQL Irql = { 0 };
-    KeAcquireSpinLock(&Ext->DeviceListLock, &Irql);
-    LIST_FORALL_SAFE(&Ext->DeviceList, Link, Next) {
-        Device = (PWNBD_SCSI_DEVICE)CONTAINING_RECORD(Link, WNBD_SCSI_DEVICE, ListEntry);
-        if (Device->HardTerminateDevice || All) {
-            WNBD_LOG_INFO("Deleting device %p with %d:%d:%d",
-                Device, Device->Bus, Device->Target, Device->Lun);
-            WnbdDeleteConnection(Ext, Device->Properties.InstanceName);
-            RemoveEntryList(&Device->ListEntry);
-            WnbdCleanupDevice(Device);
-            Device = NULL;
-            if (FALSE == All) {
-                break;
-            }
-        }
-    }
-
-    if (All) {
-        // TODO: check if we can destroy uninitialized WSK.
-        KsInitialize();
-        KsDestroy();
-    }
-    KeReleaseSpinLock(&Ext->DeviceListLock, Irql);
+    // TODO: check if we can destroy uninitialized WSK.
+    KsInitialize();
+    KsDestroy();
 
     WNBD_LOG_LOUD(": Exit");
-}
-
-VOID
-WnbdDeviceCleanerThread(_In_ PVOID Context)
-{
-    WNBD_LOG_LOUD(": Enter");
-    ASSERT(Context);
-    PWNBD_EXTENSION Ext = (PWNBD_EXTENSION)Context;
-
-    while (TRUE) {
-        KeWaitForSingleObject(&Ext->DeviceCleanerEvent, Executive, KernelMode, FALSE, NULL);
-        if (Ext->StopDeviceCleaner) {
-            WNBD_LOG_INFO("Removing all devices.");
-        }
-        WnbdDeleteDevices(Ext, Ext->StopDeviceCleaner);
-    }
-
-    WNBD_LOG_LOUD(": Exit");
-    PsTerminateSystemThread(STATUS_SUCCESS);
 }
 
 BOOLEAN
@@ -303,7 +229,7 @@ WnbdRequestWrite(_In_ PWNBD_SCSI_DEVICE Device,
     if (STOR_STATUS_SUCCESS != StorResult) {
         Status = SRB_STATUS_INTERNAL_ERROR;
     } else {
-        NbdWriteStat(Device->Socket,
+        NbdWriteStat(Device->NbdSocket,
                      Element->StartingLbn,
                      Element->ReadLength,
                      &Status,
@@ -325,16 +251,13 @@ VOID CloseSocket(_In_ PWNBD_SCSI_DEVICE Device) {
         WNBD_LOG_INFO("Closing socket FD: %d", Device->SocketToClose);
         Close(Device->SocketToClose);
     }
-    if (-1 != Device->Socket) {
-        WNBD_LOG_INFO("Closing socket FD: %d", Device->Socket);
-        Close(Device->Socket);
+    if (-1 != Device->NbdSocket) {
+        WNBD_LOG_INFO("Closing socket FD: %d", Device->NbdSocket);
+        Close(Device->NbdSocket);
     }
 
-    Device->Socket = -1;
+    Device->NbdSocket = -1;
     Device->SocketToClose = -1;
-    if (Device) {
-        Device->HardTerminateDevice = TRUE;
-    }
     ExReleaseResourceLite(&Device->SocketLock);
     KeLeaveCriticalRegion();
 }
@@ -342,18 +265,14 @@ VOID CloseSocket(_In_ PWNBD_SCSI_DEVICE Device) {
 VOID DisconnectSocket(_In_ PWNBD_SCSI_DEVICE Device) {
     KeEnterCriticalRegion();
     ExAcquireResourceExclusiveLite(&Device->SocketLock, TRUE);
-    Device->SocketToClose = -1;
-    if (-1 != Device->Socket) {
-        WNBD_LOG_INFO("Closing socket FD: %d", Device->Socket);
-        Device->SocketToClose = Device->Socket;
+    if (-1 != Device->NbdSocket) {
+        WNBD_LOG_INFO("Closing socket FD: %d", Device->NbdSocket);
+        Device->SocketToClose = Device->NbdSocket;
         // We're setting this to -1 to avoid sending further requests. We're
         // using SocketToClose so that CloseSocket can actually close it.
         // TODO: consider merging those two functions.
-        Device->Socket = -1;
-        Disconnect(Device->Socket);
-    }
-    if (Device) {
-        Device->HardTerminateDevice = TRUE;
+        Device->NbdSocket = -1;
+        Disconnect(Device->SocketToClose);
     }
     ExReleaseResourceLite(&Device->SocketLock);
     KeLeaveCriticalRegion();
@@ -415,7 +334,7 @@ WnbdProcessDeviceThreadRequests(_In_ PWNBD_SCSI_DEVICE Device)
                                           NbdTransmissionFlags);
             } else {
                 NbdRequest(
-                    Device->Socket,
+                    Device->NbdSocket,
                     Element->StartingLbn,
                     Element->ReadLength,
                     &Status,
@@ -454,13 +373,23 @@ WnbdDeviceRequestThread(_In_ PVOID Context)
 
     PWNBD_SCSI_DEVICE Device = (PWNBD_SCSI_DEVICE) Context;
     while (!Device->HardTerminateDevice) {
-        // TODO: should this be moved in the WnbdProcessDeviceThreadRequests loop?
-        // TODO: also wait for terminate event.
-        KeWaitForSingleObject(&Device->DeviceEvent, Executive, KernelMode,
-                              FALSE, NULL);
-        if (Device->HardTerminateDevice) {
+        PVOID WaitObjects[2];
+        WaitObjects[0] = &Device->DeviceEvent;
+        WaitObjects[1] = &Device->TerminateEvent;
+        NTSTATUS WaitResult = KeWaitForMultipleObjects(
+            2, WaitObjects, WaitAny, Executive, KernelMode,
+            TRUE, NULL, NULL);
+        if (STATUS_WAIT_1 == WaitResult || Device->HardTerminateDevice)
+            break;
+
+        if (STATUS_ALERTED == WaitResult) {
+            // This happens when the calling thread is terminating.
+            // TODO: ensure that we haven't been alerted for some other reason.
+            WNBD_LOG_INFO("Wait alterted, terminating.");
+            KeSetEvent(&Device->TerminateEvent, IO_NO_INCREMENT, FALSE);
             break;
         }
+
         WnbdProcessDeviceThreadRequests(Device);
     }
 
@@ -541,7 +470,7 @@ WnbdProcessDeviceThreadReplies(_In_ PWNBD_SCSI_DEVICE Device)
     PVOID SrbBuff = NULL, TempBuff = NULL;
     NTSTATUS error = STATUS_SUCCESS;
 
-    Status = NbdReadReply(Device->Socket, &Reply);
+    Status = NbdReadReply(Device->NbdSocket, &Reply);
     if (Status) {
         DisconnectSocket(Device);
         // Sleep for a bit to avoid a lazy poll here since the connection
@@ -609,7 +538,7 @@ WnbdProcessDeviceThreadReplies(_In_ PWNBD_SCSI_DEVICE Device)
             TempBuff = Device->ReadPreallocatedBuffer;
         }
 
-        if (-1 == NbdReadExact(Device->Socket, TempBuff, Element->ReadLength, &error)) {
+        if (-1 == NbdReadExact(Device->NbdSocket, TempBuff, Element->ReadLength, &error)) {
             WNBD_LOG_ERROR("Failed receiving reply %p 0x%llx. Error: %d",
                            Element->Srb, Element->Tag, error);
             Element->Srb->DataTransferLength = 0;

@@ -504,11 +504,12 @@ WnbdPendElement(_In_ PWNBD_EXTENSION DeviceExtension,
     }
     WNBD_LOG_INFO("Queuing Element, SRB= %p", Srb);
 
-    Element->DeviceExtension = &DeviceExtension;
+    Element->DeviceExtension = DeviceExtension;
     Element->Srb = Srb;
     Element->StartingLbn = StartingLbn;
     Element->ReadLength = (ULONG)DataLength;
     Element->Aborted = 0;
+    Element->Completed = 0;
     Element->FUA = FUA;
     ExInterlockedInsertTailList(&Device->RequestListHead, &Element->Link, &Device->RequestListLock);
     KeReleaseSemaphore(&Device->DeviceEvent, 0, 1, FALSE);

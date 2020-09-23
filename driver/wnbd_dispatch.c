@@ -128,7 +128,7 @@ NTSTATUS WnbdDispatchRequest(
             // This happens when the calling thread is terminating.
             // TODO: ensure that we haven't been alerted for some other reason.
             WNBD_LOG_INFO("Wait alterted, terminating.");
-            Device->HardTerminateDevice = 1;
+            KeSetEvent(&Device->TerminateEvent, IO_NO_INCREMENT, FALSE);
             break;
         }
 

@@ -34,11 +34,7 @@ CompleteRequest(_In_ PWNBD_SCSI_DEVICE Device,
                 _In_ BOOLEAN FreeElement);
 
 VOID
-WnbdDeviceCleanerThread(_In_ PVOID Context);
-
-VOID
-WnbdCleanupDevice(_In_ PWNBD_SCSI_DEVICE Device);
-
+WnbdCleanupAllDevices(_In_ PWNBD_EXTENSION DeviceExtension);
 
 // Increments the device rundown protection reference count, preventing
 // it from being cleaned up.

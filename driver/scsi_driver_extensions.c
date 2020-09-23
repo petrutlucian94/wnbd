@@ -107,7 +107,6 @@ WnbdHwFindAdapter(PVOID DeviceExtension,
     WNBD_LOG_LOUD(": Enter");
     PWNBD_EXTENSION Ext = (PWNBD_EXTENSION) DeviceExtension;
     NTSTATUS Status = STATUS_SUCCESS;
-    HANDLE DeviceCleanerHandle = NULL;
 
     /*
      * https://docs.microsoft.com/en-us/previous-versions/windows/hardware/drivers/ff563901(v%3Dvs.85)
@@ -141,24 +140,8 @@ WnbdHwFindAdapter(PVOID DeviceExtension,
 
     InitializeListHead(&Ext->DeviceList);       
     KeInitializeSpinLock(&Ext->DeviceListLock);
-    KeInitializeEvent(&Ext->DeviceCleanerEvent, SynchronizationEvent, FALSE);
-
-    /*
-     * Initialize out device thread cleaner
-     */
-    Status = PsCreateSystemThread(&DeviceCleanerHandle,
-                                  (ACCESS_MASK)0L, NULL, NULL, NULL,
-                                  WnbdDeviceCleanerThread, Ext);
-    if (!NT_SUCCESS(Status)) {
-        Status = STATUS_INSUFFICIENT_RESOURCES;
-        goto CleanLock;
-    }
-    Status = ObReferenceObjectByHandle(DeviceCleanerHandle, THREAD_ALL_ACCESS, NULL,
-        KernelMode, &Ext->DeviceCleaner, NULL);
-    if (!NT_SUCCESS(Status)) {
-        Status = STATUS_INSUFFICIENT_RESOURCES;
-        goto CleanAdapter;
-    }
+    KeInitializeEvent(&Ext->GlobalDeviceRemovalEvent, SynchronizationEvent, FALSE);
+    ExInitializeRundownProtection(&Ext->RundownProtection);
 
     /*
      * Setup user-space communication device
@@ -168,7 +151,7 @@ WnbdHwFindAdapter(PVOID DeviceExtension,
 
     if (!NT_SUCCESS(Status)) {
         WNBD_LOG_ERROR(": Error calling IoRegisterDeviceInterface. Failed with NTSTATUS: %x.", Status);
-        goto CleanAdapter;
+        goto CleanLock;
     }
 
     WnbdInitScsiIds();
@@ -181,9 +164,6 @@ WnbdHwFindAdapter(PVOID DeviceExtension,
     return SP_RETURN_FOUND;
 Exit:
     RtlFreeUnicodeString(&Ext->DeviceInterface);
-CleanAdapter:
-    Ext->StopDeviceCleaner = TRUE;
-    KeSetEvent(&Ext->DeviceCleanerEvent, IO_NO_INCREMENT, TRUE);
 CleanLock:
     ExDeleteResourceLite(&Ext->DeviceResourceLock);
 Clean:
@@ -205,10 +185,7 @@ WnbdHwFreeAdapterResources(_In_ PVOID DeviceExtension)
 
     PWNBD_EXTENSION	Ext = (PWNBD_EXTENSION) DeviceExtension;
 
-    Ext->StopDeviceCleaner = TRUE;
-    KeSetEvent(&Ext->DeviceCleanerEvent, IO_NO_INCREMENT, FALSE);
-    KeWaitForSingleObject(Ext->DeviceCleaner, Executive, KernelMode, FALSE, NULL);
-    ObDereferenceObject(Ext->DeviceCleaner);
+    WnbdCleanupAllDevices(Ext);
     ExDeleteResourceLite(&Ext->DeviceResourceLock);
 
     WNBD_LOG_LOUD(": Exit");
