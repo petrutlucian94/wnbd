@@ -53,7 +53,7 @@ WnbdRequestWrite(_In_ PWNBD_SCSI_DEVICE Device,
     } else {
         NbdWriteStat(Device->NbdSocket,
                      Element->StartingLbn,
-                     Element->ReadLength,
+                     Element->DataLength,
                      &Status,
                      Buffer,
                      &Device->WritePreallocatedBuffer,
@@ -78,8 +78,8 @@ WnbdProcessDeviceThreadRequests(_In_ PWNBD_SCSI_DEVICE Device)
     static UINT64 RequestTag = 0;
 
     while ((Request = ExInterlockedRemoveHeadList(
-            &Device->RequestListHead,
-            &Device->RequestListLock)) != NULL) {
+            &Device->PendingReqListHead,
+            &Device->PendingReqListLock)) != NULL) {
         RequestTag += 1;
         Element = CONTAINING_RECORD(Request, SRB_QUEUE_ELEMENT, Link);
         Element->Tag = RequestTag;
@@ -111,8 +111,8 @@ WnbdProcessDeviceThreadRequests(_In_ PWNBD_SCSI_DEVICE Device)
                 return;
             }
             ExInterlockedInsertTailList(
-                &Device->ReplyListHead,
-                &Element->Link, &Device->ReplyListLock);
+                &Device->SubmittedReqListHead,
+                &Element->Link, &Device->SubmittedReqListLock);
             WNBD_LOG_LOUD("Sending %s request. Address: %p Tag: 0x%llx. FUA: %d",
                           NbdRequestTypeStr(NbdReqType), Element->Srb, Element->Tag,
                           Element->FUA);
@@ -124,7 +124,7 @@ WnbdProcessDeviceThreadRequests(_In_ PWNBD_SCSI_DEVICE Device)
                 NbdRequest(
                     Device->NbdSocket,
                     Element->StartingLbn,
-                    Element->ReadLength,
+                    Element->DataLength,
                     &Status,
                     Element->Tag,
                     NbdReqType | NbdTransmissionFlags);
@@ -220,8 +220,8 @@ NbdProcessDeviceThreadReplies(_In_ PWNBD_SCSI_DEVICE Device)
     }
     PLIST_ENTRY ItemLink, ItemNext;
     KIRQL Irql = { 0 };
-    KeAcquireSpinLock(&Device->ReplyListLock, &Irql);
-    LIST_FORALL_SAFE(&Device->ReplyListHead, ItemLink, ItemNext) {
+    KeAcquireSpinLock(&Device->SubmittedReqListLock, &Irql);
+    LIST_FORALL_SAFE(&Device->SubmittedReqListHead, ItemLink, ItemNext) {
         Element = CONTAINING_RECORD(ItemLink, SRB_QUEUE_ELEMENT, Link);
         if (Element->Tag == Reply.Handle) {
             /* Remove the element from the list once found*/
@@ -230,7 +230,7 @@ NbdProcessDeviceThreadReplies(_In_ PWNBD_SCSI_DEVICE Device)
         }
         Element = NULL;
     }
-    KeReleaseSpinLock(&Device->ReplyListLock, Irql);
+    KeReleaseSpinLock(&Device->SubmittedReqListLock, Irql);
     if(!Element) {
         WNBD_LOG_ERROR("Received reply with no matching request tag: 0x%llx",
             Reply.Handle);
@@ -262,21 +262,21 @@ NbdProcessDeviceThreadReplies(_In_ PWNBD_SCSI_DEVICE Device)
     }
 
     if(!Reply.Error && IsReadSrb(Element->Srb)) {
-        if (Element->ReadLength > Device->ReadPreallocatedBufferLength) {
-            TempBuff = NbdMalloc(Element->ReadLength);
+        if (Element->DataLength > Device->ReadPreallocatedBufferLength) {
+            TempBuff = NbdMalloc(Element->DataLength);
             if (!TempBuff) {
                 Status = STATUS_INSUFFICIENT_RESOURCES;
                 WnbdDisconnectAsync(Device, TRUE);
                 goto Exit;
             }
-            Device->ReadPreallocatedBufferLength = Element->ReadLength;
+            Device->ReadPreallocatedBufferLength = Element->DataLength;
             ExFreePool(Device->ReadPreallocatedBuffer);
             Device->ReadPreallocatedBuffer = TempBuff;
         } else {
             TempBuff = Device->ReadPreallocatedBuffer;
         }
 
-        if (-1 == NbdReadExact(Device->NbdSocket, TempBuff, Element->ReadLength, &error)) {
+        if (-1 == NbdReadExact(Device->NbdSocket, TempBuff, Element->DataLength, &error)) {
             WNBD_LOG_ERROR("Failed receiving reply %p 0x%llx. Error: %d",
                            Element->Srb, Element->Tag, error);
             Element->Srb->DataTransferLength = 0;
@@ -288,7 +288,7 @@ NbdProcessDeviceThreadReplies(_In_ PWNBD_SCSI_DEVICE Device)
                 // SrbBuff can't be NULL
 #pragma warning(push)
 #pragma warning(disable:6387)
-                RtlCopyMemory(SrbBuff, TempBuff, Element->ReadLength);
+                RtlCopyMemory(SrbBuff, TempBuff, Element->DataLength);
 #pragma warning(pop)
             }
         }
@@ -300,8 +300,8 @@ NbdProcessDeviceThreadReplies(_In_ PWNBD_SCSI_DEVICE Device)
         Element->Srb->SrbStatus = SRB_STATUS_ABORTED;
     }
     else {
-        // TODO: rename ReadLength to DataLength
-        Element->Srb->DataTransferLength = Element->ReadLength;
+        // TODO: rename DataLength to DataLength
+        Element->Srb->DataTransferLength = Element->DataLength;
         Element->Srb->SrbStatus = SRB_STATUS_SUCCESS;
     }
 
