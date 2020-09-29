@@ -8,6 +8,8 @@
 #include "debug.h"
 #include "driver.h"
 #include "scsi_driver_extensions.h"
+#include "util.h"
+#include "userspace.h"
 
 DRIVER_INITIALIZE DriverEntry;
 DRIVER_UNLOAD WnbdDriverUnload;
@@ -167,8 +169,10 @@ WnbdDispatchPnp(PDEVICE_OBJECT DeviceObject,
     NTSTATUS Status = STATUS_INVALID_DEVICE_REQUEST;
     PIO_STACK_LOCATION IoLocation = IoGetCurrentIrpStackLocation(Irp);
     ASSERT(IoLocation);
+    UCHAR MinorFunction = IoLocation->MinorFunction;
+    PWNBD_SCSI_DEVICE DiskDevice = NULL;
 
-    switch (IoLocation->MinorFunction) {
+    switch (MinorFunction) {
     case IRP_MN_QUERY_CAPABILITIES:
         /*
          * Set our device capability
@@ -178,17 +182,30 @@ WnbdDispatchPnp(PDEVICE_OBJECT DeviceObject,
         IoLocation->Parameters.DeviceCapabilities.Capabilities->SilentInstall = 1;
         IoLocation->Parameters.DeviceCapabilities.Capabilities->SurpriseRemovalOK = 1;
         break;
-
     case IRP_MN_START_DEVICE:
         WNBD_LOG_INFO("IRP_MN_START_DEVICE");
         break;
-
     case IRP_MN_REMOVE_DEVICE:
         WNBD_LOG_INFO("IRP_MN_REMOVE_DEVICE");
+        DiskDevice = WnbdFindDeviceByPDO(DeviceObject, TRUE);
         break;
     }
 
     Status = StorPortDispatchPnp(DeviceObject, Irp);
+
+    switch (MinorFunction) {
+        case IRP_MN_REMOVE_DEVICE:
+
+        if (DiskDevice) {
+            WNBD_LOG_INFO("Received PnP request to disconnect %s.",
+                          DiskDevice->Properties.InstanceName);
+            WnbdDisconnectSync(DiskDevice);
+        }
+        else {
+            WNBD_LOG_INFO("Could not find disk device by PDO.");
+        }
+        break;
+    }
 
     WNBD_LOG_LOUD(": Exit");
     return Status;

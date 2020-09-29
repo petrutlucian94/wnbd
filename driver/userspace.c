@@ -45,7 +45,7 @@ WnbdSetInquiryData(_Inout_ PINQUIRYDATA InquiryData)
     InquiryData->DeviceType = DIRECT_ACCESS_DEVICE;
     InquiryData->DeviceTypeQualifier = DEVICE_QUALIFIER_ACTIVE;
     InquiryData->DeviceTypeModifier = 0;
-    InquiryData->RemovableMedia = 0;
+    InquiryData->RemovableMedia = TRUE;
     // TODO: consider bumping to SPC-4 or SPC-5.
     InquiryData->Versions = 5;
     InquiryData->ResponseDataFormat = 2;
@@ -443,18 +443,7 @@ WnbdDeleteConnection(PWNBD_EXTENSION DeviceExtension,
         return STATUS_OBJECT_NAME_NOT_FOUND;
     }
 
-    // We're holding a device reference, preventing it from being
-    // cleaned up while we're accessing it.
-    PVOID DeviceMonitorThread = Device->DeviceMonitorThread;
-    // Make sure that the thread handle stays valid.
-    ObReferenceObject(DeviceMonitorThread);
-    KeSetEvent(&Device->TerminateEvent, IO_NO_INCREMENT, FALSE);
-    // It's very important to release our device reference, allowing it to be removed.
-    // Do not access the device after releasing it.
-    WnbdReleaseDevice(Device);
-
-    KeWaitForSingleObject(DeviceMonitorThread, Executive, KernelMode, FALSE, NULL);
-    ObDereferenceObject(DeviceMonitorThread);
+    WnbdDisconnectSync(Device);
     
     WNBD_LOG_LOUD(": Exit");  
     return STATUS_SUCCESS;

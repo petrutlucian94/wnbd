@@ -187,6 +187,7 @@ WnbdPNPFunction(PSCSI_REQUEST_BLOCK Srb)
             DeviceCapabilitiesEx->SilentInstall = 1;
             DeviceCapabilitiesEx->SurpriseRemovalOK = 1;
             DeviceCapabilitiesEx->Removable = 1;
+            DeviceCapabilitiesEx->EjectSupported = 1;
 
             SrbStatus = SRB_STATUS_SUCCESS;
         }

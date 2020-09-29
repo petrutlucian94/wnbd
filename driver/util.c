@@ -216,6 +216,24 @@ WnbdFindDeviceByInstanceName(
     return Device;
 }
 
+// The returned device must be subsequently relased using WnbdReleaseDevice,
+// if "Acquire" is set. Unacquired device pointers must not be dereferenced.
+PWNBD_SCSI_DEVICE
+WnbdFindDeviceByPDO(PDEVICE_OBJECT DeviceObject, BOOLEAN Acquire)
+{
+    SCSI_ADDRESS ScsiAddress = { 0 };
+    NTSTATUS Status = WnbdGetScsiAddress(DeviceObject, &ScsiAddress);
+    if (!NT_SUCCESS(Status)) {
+        // TODO: use _LOUD
+        WNBD_LOG_INFO("Could not find PDO SCSI address.");
+        return NULL;
+    }
+
+    return WnbdFindDeviceByAddr(
+        (PWNBD_EXTENSION)DeviceObject->DeviceExtension,
+        ScsiAddress.PathId, ScsiAddress.TargetId, ScsiAddress.Lun, Acquire);
+}
+
 VOID CloseSocket(_In_ PWNBD_SCSI_DEVICE Device) {
     KeEnterCriticalRegion();
     ExAcquireResourceExclusiveLite(&Device->SocketLock, TRUE);
@@ -261,6 +279,27 @@ WnbdDisconnectAsync(PWNBD_SCSI_DEVICE Device, BOOLEAN Hard)
         Device->HardTerminateDevice = TRUE;
     KeSetEvent(&Device->TerminateEvent, IO_NO_INCREMENT, FALSE);
 
+    WNBD_LOG_LOUD(": Exit");
+}
+
+// The specified device must be acquired. It will be released by
+// WnbdDisconnectSync.
+VOID
+WnbdDisconnectSync(_In_ PWNBD_SCSI_DEVICE Device)
+{
+    WNBD_LOG_LOUD(": Enter");
+    // We're holding a device reference, preventing it from being
+    // cleaned up while we're accessing it.
+    PVOID DeviceMonitorThread = Device->DeviceMonitorThread;
+    // Make sure that the thread handle stays valid.
+    ObReferenceObject(DeviceMonitorThread);
+    KeSetEvent(&Device->TerminateEvent, IO_NO_INCREMENT, FALSE);
+    // It's very important to release our device reference, allowing it to be removed.
+    // Do not access the device after releasing it.
+    WnbdReleaseDevice(Device);
+
+    KeWaitForSingleObject(DeviceMonitorThread, Executive, KernelMode, FALSE, NULL);
+    ObDereferenceObject(DeviceMonitorThread);
     WNBD_LOG_LOUD(": Exit");
 }
 
@@ -370,4 +409,68 @@ VOID CompleteRequest(
     if (FreeElement) {
         ExFreePool(Element);
     }
+}
+
+VOID WnbdSendIoctl(
+    ULONG ControlCode,
+    PDEVICE_OBJECT DeviceObject,
+    PVOID InputBuffer,
+    ULONG InputBufferLength,
+    PVOID OutputBuffer,
+    ULONG OutputBufferLength,
+    PIO_STATUS_BLOCK IoStatus)
+{
+    ASSERT(!KeAreAllApcsDisabled());
+
+    KEVENT Event;
+    KeInitializeEvent(&Event, NotificationEvent, FALSE);
+
+    PIRP Irp = IoBuildDeviceIoControlRequest(
+        ControlCode,
+        DeviceObject,
+        InputBuffer,
+        InputBufferLength,
+        OutputBuffer,
+        OutputBufferLength,
+        FALSE,
+        &Event,
+        IoStatus);
+    if (!Irp)
+    {
+        IoStatus->Information = 0;
+        IoStatus->Status = STATUS_INSUFFICIENT_RESOURCES;
+        return;
+    }
+
+    NTSTATUS Result = IoCallDriver(DeviceObject, Irp);
+    if (NT_ERROR(Result))
+    {
+        IoStatus->Status = Result;
+        IoStatus->Information = 0;
+    }
+    if (STATUS_PENDING == Result) {
+        KeWaitForSingleObject(&Event, Executive, KernelMode, FALSE, 0);
+    }
+}
+
+NTSTATUS WnbdGetScsiAddress(
+    PDEVICE_OBJECT DeviceObject,
+    PSCSI_ADDRESS ScsiAddress)
+{
+    IO_STATUS_BLOCK IoStatus = { 0 };
+
+    RtlZeroMemory(ScsiAddress, sizeof(SCSI_ADDRESS));
+    WnbdSendIoctl(
+        IOCTL_SCSI_GET_ADDRESS,
+        DeviceObject,
+        0, 0,
+        ScsiAddress, sizeof(SCSI_ADDRESS),
+        &IoStatus);
+    if (!NT_SUCCESS(IoStatus.Status))
+        return IoStatus.Status;
+
+    if (IoStatus.Information < sizeof(ScsiAddress))
+        return STATUS_OBJECT_NAME_NOT_FOUND;
+
+    return STATUS_SUCCESS;
 }

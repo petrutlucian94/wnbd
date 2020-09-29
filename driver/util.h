@@ -35,6 +35,10 @@ WnbdReleaseDevice(_In_ PWNBD_SCSI_DEVICE Device);
 // to avoid further processing.
 VOID
 WnbdDisconnectAsync(PWNBD_SCSI_DEVICE Device, BOOLEAN Hard);
+// The specified device must be acquired. It will be released by
+// WnbdDisconnectSync.
+VOID
+WnbdDisconnectSync(_In_ PWNBD_SCSI_DEVICE Device);
 
 // Device returned by WnbdFindDevice* functions must be subsequently
 // relased using WnbdReleaseDevice, if "Acquire" is set.
@@ -55,6 +59,10 @@ PWNBD_SCSI_DEVICE
 WnbdFindDeviceByInstanceName(
     _In_ PWNBD_EXTENSION DeviceExtension,
     _In_ PCHAR InstanceName,
+    _In_ BOOLEAN Acquire);
+PWNBD_SCSI_DEVICE
+WnbdFindDeviceByPDO(
+    _In_ PDEVICE_OBJECT DeviceObject,
     _In_ BOOLEAN Acquire);
 
 BOOLEAN
@@ -99,3 +107,16 @@ ScsiOpToWnbdReqType(int ScsiOp)
         return WnbdReqTypeUnknown;
     }
 }
+
+VOID WnbdSendIoctl(
+    ULONG ControlCode,
+    PDEVICE_OBJECT DeviceObject,
+    PVOID InputBuffer,
+    ULONG InputBufferLength,
+    PVOID OutputBuffer,
+    ULONG OutputBufferLength,
+    PIO_STATUS_BLOCK IoStatus);
+NTSTATUS
+WnbdGetScsiAddress(
+    PDEVICE_OBJECT DeviceObject,
+    PSCSI_ADDRESS ScsiAddress);
