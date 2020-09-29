@@ -160,7 +160,9 @@ DWORD WnbdSendResponse(
     PVOID DataBuffer,
     UINT32 DataBufferSize);
 
+// Open the WNBD SCSI adapter device.
 DWORD WnbdOpenDevice(PHANDLE Handle);
+DWORD WnbdOpenDeviceEx(PHANDLE Handle, PHDEVINFO DevInfo)
 DWORD WnbdIoctlPing(HANDLE Device);
 
 DWORD WnbdIoctlCreate(

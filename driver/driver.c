@@ -147,8 +147,8 @@ DriverEntry(PDRIVER_OBJECT DriverObject,
      */
     StorPortDriverUnload = DriverObject->DriverUnload;
     DriverObject->DriverUnload = WnbdDriverUnload;
-    StorPortDispatchPnp = DriverObject->MajorFunction[IRP_MJ_PNP];
-    DriverObject->MajorFunction[IRP_MJ_PNP] = 0 != StorPortDispatchPnp ? WnbdDispatchPnp : 0;
+    // StorPortDispatchPnp = DriverObject->MajorFunction[IRP_MJ_PNP];
+    // DriverObject->MajorFunction[IRP_MJ_PNP] = 0 != StorPortDispatchPnp ? WnbdDispatchPnp : 0;
 
     WNBD_LOG_LOUD(": Exit");
 
@@ -178,16 +178,19 @@ WnbdDispatchPnp(PDEVICE_OBJECT DeviceObject,
          * Set our device capability
          */
         WNBD_LOG_INFO("IRP_MN_QUERY_CAPABILITIES");
-        IoLocation->Parameters.DeviceCapabilities.Capabilities->Removable = 1;
         IoLocation->Parameters.DeviceCapabilities.Capabilities->SilentInstall = 1;
-        IoLocation->Parameters.DeviceCapabilities.Capabilities->SurpriseRemovalOK = 1;
+        // We're disabling SurpriseRemovalOK in order to
+        // receive device removal PnP events.
+        IoLocation->Parameters.DeviceCapabilities.Capabilities->SurpriseRemovalOK = 0;
+        IoLocation->Parameters.DeviceCapabilities.Capabilities->Removable = 1;
+        IoLocation->Parameters.DeviceCapabilities.Capabilities->EjectSupported = 1;
         break;
     case IRP_MN_START_DEVICE:
         WNBD_LOG_INFO("IRP_MN_START_DEVICE");
         break;
     case IRP_MN_REMOVE_DEVICE:
         WNBD_LOG_INFO("IRP_MN_REMOVE_DEVICE");
-        DiskDevice = WnbdFindDeviceByPDO(DeviceObject, TRUE);
+        // DiskDevice = WnbdFindDeviceByPDO(DeviceObject, TRUE);
         break;
     }
 
@@ -199,7 +202,7 @@ WnbdDispatchPnp(PDEVICE_OBJECT DeviceObject,
         if (DiskDevice) {
             WNBD_LOG_INFO("Received PnP request to disconnect %s.",
                           DiskDevice->Properties.InstanceName);
-            WnbdDisconnectSync(DiskDevice);
+            // WnbdDisconnectSync(DiskDevice);
         }
         else {
             WNBD_LOG_INFO("Could not find disk device by PDO.");
@@ -207,7 +210,7 @@ WnbdDispatchPnp(PDEVICE_OBJECT DeviceObject,
         break;
     }
 
-    WNBD_LOG_LOUD(": Exit");
+    WNBD_LOG_LOUD(": Exit: %d", Status);
     return Status;
 }
 

@@ -13,9 +13,10 @@
 #define STRING_OVERFLOWS(Str, MaxLen) (strlen(Str + 1) > MaxLen)
 
 
-DWORD WnbdOpenDevice(PHANDLE Handle)
+// Open the WNBD SCSI adapter device.
+DWORD WnbdOpenDeviceEx(PHANDLE Handle, PHDEVINFO DevInfo)
 {
-    HDEVINFO DevInfo = { 0 };
+    HDEVINFO WnbdDevInfo = { 0 };
     SP_DEVICE_INTERFACE_DATA DevInterfaceData = { 0 };
     PSP_DEVICE_INTERFACE_DETAIL_DATA DevInterfaceDetailData = NULL;
     ULONG DevIndex = 0;
@@ -23,18 +24,20 @@ DWORD WnbdOpenDevice(PHANDLE Handle)
     ULONG ErrorCode = 0;
     HANDLE WnbdDriverHandle = INVALID_HANDLE_VALUE;
 
-    DevInfo = SetupDiGetClassDevs(&WNBD_GUID, NULL, NULL,
-                                  DIGCF_PRESENT | DIGCF_DEVICEINTERFACE);
-    if (DevInfo == INVALID_HANDLE_VALUE) {
+    WnbdDevInfo = SetupDiGetClassDevs(
+        &WNBD_GUID, NULL, NULL,
+        DIGCF_PRESENT | DIGCF_DEVICEINTERFACE);
+    if (WnbdDevInfo == INVALID_HANDLE_VALUE) {
+        ErrorCode = GetLastError();
         goto Exit;
     }
 
     DevInterfaceData.cbSize = sizeof(SP_DEVICE_INTERFACE_DATA);
     DevIndex = 0;
 
-    while (SetupDiEnumDeviceInterfaces(DevInfo, NULL, &WNBD_GUID,
+    while (SetupDiEnumDeviceInterfaces(WnbdDevInfo, NULL, &WNBD_GUID,
                                        DevIndex++, &DevInterfaceData)) {
-        if (!SetupDiGetDeviceInterfaceDetail(DevInfo, &DevInterfaceData, NULL,
+        if (!SetupDiGetDeviceInterfaceDetail(WnbdDevInfo, &DevInterfaceData, NULL,
                                              0, &RequiredSize, NULL)) {
             ErrorCode = GetLastError();
             if (ERROR_INSUFFICIENT_BUFFER != ErrorCode) {
@@ -50,7 +53,7 @@ DWORD WnbdOpenDevice(PHANDLE Handle)
         DevInterfaceDetailData->cbSize = sizeof(SP_DEVICE_INTERFACE_DETAIL_DATA);
 
         if (!SetupDiGetDeviceInterfaceDetail(
-              DevInfo, &DevInterfaceData, DevInterfaceDetailData,
+              WnbdDevInfo, &DevInterfaceData, DevInterfaceDetailData,
               RequiredSize, &RequiredSize, NULL)) {
             goto Exit;
         }
@@ -79,12 +82,24 @@ Exit:
     if (DevInterfaceDetailData) {
         free(DevInterfaceDetailData);
     }
-    if (DevInfo) {
-        SetupDiDestroyDeviceInfoList(DevInfo);
+
+    if (!ErrorCode) {
+        *Handle = WnbdDriverHandle;
+        *DevInfo = WnbdDevInfo;
     }
 
-    if (!ErrorCode)
-        *Handle = WnbdDriverHandle;
+    return ErrorCode;
+}
+
+// Open the WNBD SCSI adapter device.
+DWORD WnbdOpenDevice(PHANDLE Handle)
+{
+    HDEVINFO DevInfo = { 0 };
+
+    DWORD ErrorCode = WnbdOpenDeviceEx(Handle, &DevInfo);
+    if (!ErrorCode) {
+        SetupDiDestroyDeviceInfoList(DevInfo);
+    }
 
     return ErrorCode;
 }
