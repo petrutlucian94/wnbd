@@ -42,10 +42,14 @@ WnbdSetInquiryData(_Inout_ PINQUIRYDATA InquiryData)
     ASSERT(InquiryData);
 
     RtlZeroMemory(InquiryData, sizeof(INQUIRYDATA));
+    char ProductRevision[4] = {0};
+    RtlStringCbPrintfA(ProductRevision, sizeof(ProductRevision), "%d.%d",
+        WNBD_VERSION_MAJOR, WNBD_VERSION_MINOR);
+
     InquiryData->DeviceType = DIRECT_ACCESS_DEVICE;
     InquiryData->DeviceTypeQualifier = DEVICE_QUALIFIER_ACTIVE;
     InquiryData->DeviceTypeModifier = 0;
-    InquiryData->RemovableMedia = TRUE;
+    InquiryData->RemovableMedia = FALSE;
     // TODO: consider bumping to SPC-4 or SPC-5.
     InquiryData->Versions = 5;
     InquiryData->ResponseDataFormat = 2;
@@ -56,13 +60,11 @@ WnbdSetInquiryData(_Inout_ PINQUIRYDATA InquiryData)
         RTL_SIZEOF_THROUGH_FIELD(INQUIRYDATA, AdditionalLength);
     InquiryData->LinkedCommands = FALSE;
     RtlCopyMemory((PUCHAR)&InquiryData->VendorId[0], WNBD_INQUIRY_VENDOR_ID,
-        strlen(WNBD_INQUIRY_VENDOR_ID));
+        min(sizeof(InquiryData->VendorId), WNBD_INQUIRY_VENDOR_ID));
     RtlCopyMemory((PUCHAR)&InquiryData->ProductId[0], WNBD_INQUIRY_PRODUCT_ID,
-        strlen(WNBD_INQUIRY_PRODUCT_ID));
-    RtlCopyMemory((PUCHAR)&InquiryData->ProductRevisionLevel[0], WNBD_INQUIRY_PRODUCT_REVISION,
-        strlen(WNBD_INQUIRY_PRODUCT_REVISION));
-    RtlCopyMemory((PUCHAR)&InquiryData->VendorSpecific[0], WNBD_INQUIRY_VENDOR_SPECIFIC,
-        strlen(WNBD_INQUIRY_VENDOR_SPECIFIC));
+        min(sizeof(InquiryData->ProductId), WNBD_INQUIRY_PRODUCT_ID));
+    RtlCopyMemory((PUCHAR)&InquiryData->ProductRevisionLevel[0],
+        ProductRevision, sizeof(ProductRevision));
 
     WNBD_LOG_LOUD(": Exit");
 }
