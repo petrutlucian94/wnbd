@@ -14,6 +14,7 @@
 #include <locale>
 
 #pragma comment(lib, "Setupapi.lib")
+#pragma comment(lib, "CfgMgr32.lib")
 
 std::wstring to_wstring(std::string str)
 {
@@ -168,6 +169,7 @@ DWORD CmdStats(PCHAR InstanceName)
     printf("OutstandingIOCount: %llu\n", Stats.OutstandingIOCount);
     return Status;
 }
+
 
 
 DWORD GetList(PWNBD_CONNECTION_LIST* ConnectionList)

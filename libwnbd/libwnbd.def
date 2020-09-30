@@ -21,6 +21,7 @@ EXPORTS
     WnbdGetLibVersion
 
     WnbdOpenDevice
+    WnbdOpenDeviceEx
     WnbdIoctlPing
     WnbdIoctlCreate
     WnbdIoctlRemove

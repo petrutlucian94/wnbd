@@ -12,6 +12,9 @@
 #define STRING_OVERFLOWS(Str, MaxLen) (strlen(Str + 1) > MaxLen)
 
 
+// TODO: consider using a static function pointer instead of relying on the
+// Device structure. That will allow logging in functions that don't take
+// that argument.
 VOID LogMessage(PWNBD_DEVICE Device, WnbdLogLevel LogLevel,
                 const char* FileName, UINT32 Line, const char* FunctionName,
                 const char* Format, ...) {
@@ -134,6 +137,110 @@ Exit:
     return ErrorCode;
 }
 
+DWORD PnpRemoveDevice(
+    DEVINST DiskDeviceInst,
+    DWORD TimeoutMs,
+    DWORD RetryIntervalMs)
+{
+    DWORD Status = 0;
+
+    LARGE_INTEGER StartTime, CurrTime, ElapsedMs, CounterFreq;
+    QueryPerformanceFrequency(&CounterFreq); 
+    QueryPerformanceCounter(&StartTime);
+
+    BOOLEAN RemoveVetoed = FALSE;
+    BOOLEAN TimeLeft = TRUE;
+    do {
+        PNP_VETO_TYPE VetoType = PNP_VetoTypeUnknown; 
+        char VetoName[MAX_PATH] = { 0 };
+
+        // We're supposed to use CM_Query_And_Remove_SubTreeW when
+        // SurpriseRemovalOK is not set, otherwise we'd have to go
+        // with CM_Request_Device_EjectW.
+        DWORD CMStatus = CM_Query_And_Remove_SubTreeA(
+            DiskDeviceInst, &VetoType, VetoName, MAX_PATH, CM_REMOVE_NO_RESTART);
+
+        QueryPerformanceCounter(&CurrTime);
+        ElapsedMs.QuadPart = CurrTime.QuadPart - StartTime.QuadPart;
+        ElapsedMs.QuadPart *= 1000;
+        ElapsedMs.QuadPart /= CounterFreq.QuadPart;
+
+        RemoveVetoed = CMStatus == CR_REMOVE_VETOED;
+        TimeLeft = !TimeoutMs || (TimeoutMs > ElapsedMs.QuadPart);
+        if (CMStatus) {
+            if (!RemoveVetoed){
+                Status = ERROR_REMOVE_FAILED;
+            }
+            else if (!TimeLeft) {
+                Status = ERROR_TIMEOUT;
+            }
+
+            // TODO: remove this message.
+            fprintf(stderr,
+                    "Could not remove device. Status: %d, "
+                    "veto type %d, veto name: %s\n. Time elapsed: %llus",
+                    CMStatus, VetoType, VetoName,
+                    ElapsedMs.QuadPart * 1000);
+        }
+        if (RemoveVetoed && TimeLeft) {
+            Sleep(RetryIntervalMs);
+        }
+    } while (RemoveVetoed && TimeLeft);
+
+    return Status;
+}
+
+DWORD EjectDevices(DWORD TimeoutMs, DWORD RetryIntervalMs)
+{
+    HANDLE Handle;
+    DEVINST AdapterDevInst = 0;
+    DEVINST ChildDevInst = 0;
+    BOOLEAN MoreSiblings = TRUE;
+
+    DWORD Status = WnbdOpenDeviceEx(&Handle, &AdapterDevInst);
+    if (Status) {
+        fprintf(stderr, "Could not open device adapter.\n");
+        return Status;
+    }
+
+    DWORD CMStatus = CM_Get_Child(&ChildDevInst, AdapterDevInst, 0);
+    if (CMStatus) {
+        if (CMStatus != CR_NO_SUCH_DEVNODE) {
+            Status = ERROR_OPEN_FAILED;
+        }
+        goto Exit;
+    }
+
+    do {
+        char DeviceId[MAX_PATH];
+        if (CM_Get_Device_IDA(ChildDevInst, DeviceId, MAX_PATH, 0)) {
+            Status = ERROR_CAN_NOT_COMPLETE;
+            goto Exit;
+        }
+
+        Status = PnpRemoveDevice(ChildDevInst, TimeoutMs, RetryIntervalMs);
+
+        // TODO: remove a specific device.
+        goto Exit;
+
+        CMStatus = CM_Get_Sibling(&ChildDevInst, ChildDevInst, 0);
+        if (CMStatus) {
+            MoreSiblings = FALSE;
+            if (CMStatus != CR_NO_SUCH_DEVNODE) {
+                Status = ERROR_OPEN_FAILED;
+            }
+        }
+    } while (MoreSiblings);
+
+Exit:
+    if (Status) {
+        fprintf(stderr, "Could not get disk list info: %d\n", Status);
+    }
+    CloseHandle(Handle);
+
+    return Status;
+}
+
 DWORD WnbdRemove(PWNBD_DEVICE Device, BOOLEAN HardRemove)
 {
     // TODO: check for null pointers.
@@ -162,6 +269,10 @@ DWORD WnbdRemoveEx(const char* InstanceName, BOOLEAN HardRemove)
     DWORD Status = WnbdOpenDevice(&Handle);
     if (Status) {
         return ERROR_OPEN_FAILED;
+    }
+
+    if (!HardRemove) {
+        EjectDevices(30000, 2000);
     }
 
     Status = WnbdIoctlRemove(Handle, InstanceName, HardRemove);

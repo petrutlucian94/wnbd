@@ -1,7 +1,9 @@
 #ifndef WNBD_SHARED_H
 #define WNBD_SHARED_H
 
-#include <wnbd_ioctl.h>
+#include <cfgmgr32.h>
+
+#include "wnbd_ioctl.h"
 
 #ifdef __cplusplus
 extern "C" {
@@ -162,7 +164,7 @@ DWORD WnbdSendResponse(
 
 // Open the WNBD SCSI adapter device.
 DWORD WnbdOpenDevice(PHANDLE Handle);
-DWORD WnbdOpenDeviceEx(PHANDLE Handle, PHDEVINFO DevInfo)
+DWORD WnbdOpenDeviceEx(PHANDLE Handle, PDEVINST CMDeviceInstance);
 DWORD WnbdIoctlPing(HANDLE Device);
 
 DWORD WnbdIoctlCreate(

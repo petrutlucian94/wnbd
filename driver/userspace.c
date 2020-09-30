@@ -60,9 +60,9 @@ WnbdSetInquiryData(_Inout_ PINQUIRYDATA InquiryData)
         RTL_SIZEOF_THROUGH_FIELD(INQUIRYDATA, AdditionalLength);
     InquiryData->LinkedCommands = FALSE;
     RtlCopyMemory((PUCHAR)&InquiryData->VendorId[0], WNBD_INQUIRY_VENDOR_ID,
-        min(sizeof(InquiryData->VendorId), WNBD_INQUIRY_VENDOR_ID));
+        min(sizeof(InquiryData->VendorId), strlen(WNBD_INQUIRY_VENDOR_ID)));
     RtlCopyMemory((PUCHAR)&InquiryData->ProductId[0], WNBD_INQUIRY_PRODUCT_ID,
-        min(sizeof(InquiryData->ProductId), WNBD_INQUIRY_PRODUCT_ID));
+        min(sizeof(InquiryData->ProductId), strlen(WNBD_INQUIRY_PRODUCT_ID)));
     RtlCopyMemory((PUCHAR)&InquiryData->ProductRevisionLevel[0],
         ProductRevision, sizeof(ProductRevision));
 
