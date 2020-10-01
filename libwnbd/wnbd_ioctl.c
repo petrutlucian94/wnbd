@@ -105,6 +105,21 @@ DWORD WnbdOpenDevice(PHANDLE Handle)
     return WnbdOpenDeviceEx(Handle, &DevInst);
 }
 
+// Open the WNBD SCSI adapter device.
+DWORD WnbdOpenCMDeviceInstance(PDEVINST DeviceInstance)
+{
+    DEVINST DevInst = { 0 };
+    HANDLE Handle;
+
+    DWORD Status = WnbdOpenDeviceEx(&Handle, &DevInst);
+
+    if (!Status) {
+        CloseHandle(&Handle);
+    }
+
+    return Status;
+}
+
 DWORD WnbdIoctlCreate(HANDLE Device, PWNBD_PROPERTIES Properties,
                       PWNBD_CONNECTION_INFO ConnectionInfo)
 {
@@ -142,7 +157,8 @@ DWORD WnbdIoctlCreate(HANDLE Device, PWNBD_PROPERTIES Properties,
 
 
 DWORD WnbdIoctlRemove(
-    HANDLE Device, const char* InstanceName, BOOLEAN HardRemove)
+    HANDLE Device, const char* InstanceName,
+    PWNBD_REMOVE_COMMAND_OPTIONS RemoveOptions)
 {
     DWORD Status = ERROR_SUCCESS;
 
@@ -157,7 +173,9 @@ DWORD WnbdIoctlRemove(
     WNBD_IOCTL_REMOVE_COMMAND Command = { 0 };
 
     Command.IoControlCode = IOCTL_WNBD_REMOVE;
-    Command.Flags.HardRemove = !!HardRemove;
+    if (RemoveOptions) {
+        Command.Options = *RemoveOptions;
+    }
     memcpy(Command.InstanceName, InstanceName, strlen(InstanceName));
 
     BOOL DevStatus = DeviceIoControl(
@@ -273,6 +291,29 @@ DWORD WnbdIoctlStats(HANDLE Device, const char* InstanceName,
 
     return Status;
 }
+
+DWORD WnbdIoctlShow(HANDLE Device, const char* InstanceName,
+                    PWNBD_CONNECTION_INFO ConnectionInfo)
+{
+    DWORD Status = ERROR_SUCCESS;
+    DWORD BytesReturned = 0;
+
+    WNBD_IOCTL_SHOW_COMMAND Command = { 0 };
+    Command.IoControlCode = IOCTL_WNBD_SHOW;
+    memcpy(Command.InstanceName, InstanceName, strlen(InstanceName));
+
+    BOOL DevStatus = DeviceIoControl(
+        Device, IOCTL_MINIPORT_PROCESS_SERVICE_IRP,
+        &Command, sizeof(Command),
+        ConnectionInfo, sizeof(WNBD_CONNECTION_INFO), &BytesReturned, NULL);
+
+    if (!DevStatus) {
+        Status = GetLastError();
+    }
+
+    return Status;
+}
+
 
 DWORD WnbdIoctlReloadConfig(HANDLE Device)
 {

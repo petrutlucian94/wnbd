@@ -137,7 +137,15 @@ DWORD CmdMap(
 
 DWORD CmdUnmap(PCHAR InstanceName, BOOLEAN HardRemove)
 {
-    DWORD Status = WnbdRemoveEx(InstanceName, HardRemove);
+    WNBD_REMOVE_OPTIONS RemoveOptions = {0};
+    RemoveOptions.Flags.HardRemove = HardRemove;
+
+    // TODO: make those configurable. We should use named arguments first.
+    RemoveOptions.Flags.HardRemoveFallback = TRUE;
+    RemoveOptions.SoftRemoveTimeoutMs = WNBD_DEFAULT_RM_TIMEOUT_MS;
+    RemoveOptions.SoftRemoveRetryIntervalMs = WNBD_DEFAULT_RM_RETRY_INTERVAL_MS;
+
+    DWORD Status = WnbdRemoveEx(InstanceName, &RemoveOptions);
     if (Status) {
         CheckOpenFailed(Status);
         fprintf(stderr, "Could not disconnect WNBD device.\n");

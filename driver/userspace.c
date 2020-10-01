@@ -647,6 +647,54 @@ WnbdParseUserIOCTL(PWNBD_EXTENSION DeviceExtension,
         Status = WnbdEnumerateActiveConnections(DeviceExtension, Irp);
         break;
 
+    case IOCTL_WNBD_SHOW:
+        WNBD_LOG_LOUD("WNBD_SHOW");
+        PWNBD_IOCTL_SHOW_COMMAND ShowCmd =
+            (PWNBD_IOCTL_SHOW_COMMAND) Irp->AssociatedIrp.SystemBuffer;
+
+        if (!ShowCmd || CHECK_I_LOCATION(IoLocation, PWNBD_IOCTL_SHOW_COMMAND)) {
+            WNBD_LOG_ERROR("WNBD_SHOW: Bad input buffer");
+            Status = STATUS_INVALID_PARAMETER;
+            break;
+        }
+
+        ShowCmd->InstanceName[WNBD_MAX_NAME_LENGTH - 1] = '\0';
+        if (!strlen((PSTR) &ShowCmd->InstanceName)) {
+            WNBD_LOG_ERROR("WNBD_SHOW: Invalid instance name");
+            Status = STATUS_INVALID_PARAMETER;
+            break;
+        }
+
+        if (!Irp->AssociatedIrp.SystemBuffer ||
+                CHECK_O_LOCATION(IoLocation, WNBD_CONNECTION_INFO)) {
+            WNBD_LOG_ERROR("WNBD_SHOW: Bad output buffer");
+            Status = STATUS_BUFFER_OVERFLOW;
+            break;
+        }
+
+        Device = WnbdFindDeviceByInstanceName(
+            DeviceExtension, ShowCmd->InstanceName, TRUE);
+        if (!Device) {
+            Status = STATUS_OBJECT_NAME_NOT_FOUND;
+            WNBD_LOG_ERROR("WNBD_SHOW: Connection does not exist");
+            break;
+        }
+
+        PWNBD_CONNECTION_INFO OutConnInfo = (
+            PWNBD_CONNECTION_INFO) Irp->AssociatedIrp.SystemBuffer;
+        RtlZeroMemory(OutConnInfo, sizeof(WNBD_CONNECTION_INFO));
+        RtlCopyMemory(OutConnInfo, &Device->Properties, sizeof(WNBD_PROPERTIES));
+
+        OutConnInfo->BusNumber = (USHORT)Device->Bus;
+        OutConnInfo->TargetId = (USHORT)Device->Target;
+        OutConnInfo->Lun = (USHORT)Device->Lun;
+
+        WnbdReleaseDevice(Device);
+
+        Irp->IoStatus.Information = sizeof(WNBD_CONNECTION_INFO);
+        Status = STATUS_SUCCESS;
+        break;
+
     case IOCTL_WNBD_RELOAD_CONFIG:
         WNBD_LOG_LOUD("IOCTL_WNBD_RELOAD_CONFIG");
         WCHAR* KeyName = L"DebugLogLevel";

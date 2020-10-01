@@ -1,6 +1,8 @@
 #include <windows.h>
 
 #include <stdio.h>
+#include <codecvt>
+#include <locale>
 
 #define _NTSCSI_USER_MODE_
 #include <scsi.h>
@@ -11,6 +13,11 @@
 
 #define STRING_OVERFLOWS(Str, MaxLen) (strlen(Str + 1) > MaxLen)
 
+std::wstring to_wstring(const char* str)
+{
+    std::wstring_convert<std::codecvt_utf8<wchar_t>, wchar_t> strconverter;
+    return strconverter.from_bytes(str);
+}
 
 // TODO: consider using a static function pointer instead of relying on the
 // Device structure. That will allow logging in functions that don't take
@@ -175,12 +182,12 @@ DWORD PnpRemoveDevice(
                 Status = ERROR_TIMEOUT;
             }
 
-            // TODO: remove this message.
-            fprintf(stderr,
-                    "Could not remove device. Status: %d, "
-                    "veto type %d, veto name: %s\n. Time elapsed: %llus",
-                    CMStatus, VetoType, VetoName,
-                    ElapsedMs.QuadPart * 1000);
+            // TODO: uncomment after we update the logging mechanism.
+            // LogDebug(
+            //    "Could not remove device. Status: %d, "
+            //    "veto type %d, veto name: %s\n. Time elapsed: %llus",
+            //    CMStatus, VetoType, VetoName,
+            //    ElapsedMs.QuadPart * 1000);
         }
         if (RemoveVetoed && TimeLeft) {
             Sleep(RetryIntervalMs);
@@ -190,38 +197,39 @@ DWORD PnpRemoveDevice(
     return Status;
 }
 
-DWORD EjectDevices(DWORD TimeoutMs, DWORD RetryIntervalMs)
+DWORD GetCMDeviceInstanceByID(
+    const wchar_t* DeviceID,
+    PDEVINST CMDeviceInstance)
 {
-    HANDLE Handle;
-    DEVINST AdapterDevInst = 0;
     DEVINST ChildDevInst = 0;
     BOOLEAN MoreSiblings = TRUE;
+    DEVINST AdapterDevInst = 0;
 
-    DWORD Status = WnbdOpenDeviceEx(&Handle, &AdapterDevInst);
+    DWORD Status = WnbdOpenCMDeviceInstance(&AdapterDevInst);
     if (Status) {
-        fprintf(stderr, "Could not open device adapter.\n");
         return Status;
     }
 
     DWORD CMStatus = CM_Get_Child(&ChildDevInst, AdapterDevInst, 0);
     if (CMStatus) {
-        if (CMStatus != CR_NO_SUCH_DEVNODE) {
-            Status = ERROR_OPEN_FAILED;
+        if (CMStatus == CR_NO_SUCH_DEVNODE) {
+            return ERROR_FILE_NOT_FOUND;
         }
-        goto Exit;
+        else {
+            return ERROR_OPEN_FAILED;
+        }
     }
 
     do {
-        char DeviceId[MAX_PATH];
-        if (CM_Get_Device_IDA(ChildDevInst, DeviceId, MAX_PATH, 0)) {
-            Status = ERROR_CAN_NOT_COMPLETE;
-            goto Exit;
+        WCHAR CurrDeviceId[MAX_PATH];
+        if (CM_Get_Device_IDW(ChildDevInst, CurrDeviceId, MAX_PATH, 0)) {
+            return ERROR_CAN_NOT_COMPLETE;
         }
 
-        Status = PnpRemoveDevice(ChildDevInst, TimeoutMs, RetryIntervalMs);
-
-        // TODO: remove a specific device.
-        goto Exit;
+        if (!_wcsicmp(DeviceID, CurrDeviceId)) {
+            *CMDeviceInstance = ChildDevInst;
+            return 0;
+        }
 
         CMStatus = CM_Get_Sibling(&ChildDevInst, ChildDevInst, 0);
         if (CMStatus) {
@@ -232,38 +240,53 @@ DWORD EjectDevices(DWORD TimeoutMs, DWORD RetryIntervalMs)
         }
     } while (MoreSiblings);
 
-Exit:
-    if (Status) {
-        fprintf(stderr, "Could not get disk list info: %d\n", Status);
-    }
-    CloseHandle(Handle);
-
-    return Status;
+    return ERROR_FILE_NOT_FOUND;
 }
 
-DWORD WnbdRemove(PWNBD_DEVICE Device, BOOLEAN HardRemove)
+DWORD WnbdPnpRemoveDevice(
+    const char* InstanceName,
+    DWORD TimeoutMs,
+    DWORD RetryIntervalMs)
+{
+    WNBD_CONNECTION_INFO ConnectionInfo;
+    DWORD Status = WnbdShow(InstanceName, &ConnectionInfo);
+    if (Status)
+        return Status;
+
+    DISK_INFO Disk;
+    HRESULT hres = GetDiskInfoBySerialNumber(
+        to_wstring(ConnectionInfo.Properties.SerialNumber).c_str(), &Disk);
+    if (FAILED(hres))
+        return HRESULT_CODE(hres);
+
+    DEVINST DiskDeviceInst = 0;
+    Status = GetCMDeviceInstanceByID(Disk.PNPDeviceID.c_str(), &DiskDeviceInst);
+    if (Status)
+        return Status;
+
+    return PnpRemoveDevice(DiskDeviceInst, TimeoutMs, RetryIntervalMs);
+}
+
+DWORD WnbdRemove(
+    PWNBD_DEVICE Device,
+    PWNBD_REMOVE_OPTIONS RemoveOptions)
 {
     // TODO: check for null pointers.
     DWORD ErrorCode = ERROR_SUCCESS;
 
     LogDebug(Device, "Unmapping device %s.",
              Device->Properties.InstanceName);
-    if (Device->Handle == INVALID_HANDLE_VALUE) {
+    if (!Device->Handle || Device->Handle == INVALID_HANDLE_VALUE) {
         LogDebug(Device, "WNBD device already removed.");
         return 0;
     }
 
-    ErrorCode = WnbdIoctlRemove(
-        Device->Handle, Device->Properties.InstanceName, HardRemove);
-    if (ErrorCode && ErrorCode != ERROR_FILE_NOT_FOUND) {
-        LogError(Device, "Could not remove WNBD virtual disk. Error: %d.",
-                 ErrorCode);
-    }
-
-    return ErrorCode;
+    return WnbdRemoveEx(Device->Properties.InstanceName, RemoveOptions);
 }
 
-DWORD WnbdRemoveEx(const char* InstanceName, BOOLEAN HardRemove)
+DWORD WnbdRemoveEx(
+    const char* InstanceName,
+    PWNBD_REMOVE_OPTIONS RemoveOptions)
 {
     HANDLE Handle = INVALID_HANDLE_VALUE;
     DWORD Status = WnbdOpenDevice(&Handle);
@@ -271,12 +294,26 @@ DWORD WnbdRemoveEx(const char* InstanceName, BOOLEAN HardRemove)
         return ERROR_OPEN_FAILED;
     }
 
-    if (!HardRemove) {
-        EjectDevices(30000, 2000);
+    WNBD_REMOVE_OPTIONS DefaultRemoveOptions = { 0 };
+    if (!RemoveOptions) {
+        RemoveOptions = &DefaultRemoveOptions;
     }
 
-    Status = WnbdIoctlRemove(Handle, InstanceName, HardRemove);
+    if (!RemoveOptions->Flags.HardRemove) {
+        // PnP subscribers are notified that the device is about to be removed
+        // and can block the remove until ready.
+        Status = WnbdPnpRemoveDevice(
+            InstanceName,
+            RemoveOptions->SoftRemoveTimeoutMs,
+            RemoveOptions->SoftRemoveRetryIntervalMs);
+    }
+    if (Status && !RemoveOptions->Flags.HardRemoveFallback) {
+        return Status;
+    }
 
+    // TODO: start logging once we decouple the logger from the WNBD_DEVICE.
+    // We can continue to ignore "NOT_FOUND" errors.
+    Status = WnbdIoctlRemove(Handle, InstanceName, NULL);
     CloseHandle(Handle);
     return Status;
 }
@@ -292,6 +329,22 @@ DWORD WnbdList(
     }
 
     Status = WnbdIoctlList(Handle, ConnectionList, BufferSize);
+
+    CloseHandle(Handle);
+    return Status;
+}
+
+DWORD WnbdShow(
+    const char* InstanceName,
+    PWNBD_CONNECTION_INFO ConnectionInfo)
+{
+    HANDLE Handle = INVALID_HANDLE_VALUE;
+    DWORD Status = WnbdOpenDevice(&Handle);
+    if (Status) {
+        return ERROR_OPEN_FAILED;
+    }
+
+    Status = WnbdIoctlShow(Handle, InstanceName, ConnectionInfo);
 
     CloseHandle(Handle);
     return Status;
@@ -442,7 +495,7 @@ BOOLEAN WnbdIsRunning(PWNBD_DEVICE Device)
     return Device->Started && !WnbdIsStopped(Device);
 }
 
-DWORD WnbdStopDispatcher(PWNBD_DEVICE Device, BOOLEAN HardRemove)
+DWORD WnbdStopDispatcher(PWNBD_DEVICE Device, PWNBD_REMOVE_OPTIONS RemoveOptions)
 {
     // By not setting the "Stopped" event, we allow the driver to finish
     // pending IO requests, which we'll continue processing until getting
@@ -451,7 +504,7 @@ DWORD WnbdStopDispatcher(PWNBD_DEVICE Device, BOOLEAN HardRemove)
 
     LogDebug(Device, "Stopping dispatcher.");
     if (!InterlockedExchange8((CHAR*)&Device->Stopping, 1)) {
-        Ret = WnbdRemove(Device, HardRemove);
+        Ret = WnbdRemove(Device, RemoveOptions);
     }
 
     return Ret;
@@ -670,7 +723,9 @@ DWORD WnbdDispatcherLoop(PWNBD_DEVICE Device)
         WnbdHandleRequest(Device, &Request, Buffer);
     }
 
-    WnbdStopDispatcher(Device, TRUE);
+    WNBD_REMOVE_OPTIONS RemoveOptions = {0};
+    RemoveOptions.Flags.HardRemove = TRUE;
+    WnbdStopDispatcher(Device, &RemoveOptions);
     free(Buffer);
 
     return ErrorCode;
@@ -704,7 +759,9 @@ DWORD WnbdStartDispatcher(PWNBD_DEVICE Device, DWORD ThreadCount)
         {
             LogError(Device, "Could not start dispatcher thread.");
             ErrorCode = GetLastError();
-            WnbdStopDispatcher(Device, TRUE);
+            WNBD_REMOVE_OPTIONS RemoveOptions = {0};
+            RemoveOptions.Flags.HardRemove = TRUE;
+            WnbdStopDispatcher(Device, &RemoveOptions);
             WnbdWaitDispatcher(Device);
             break;
         }

@@ -25,6 +25,8 @@ extern "C" {
 #include "wnbd.h"
 
 #define WNBD_CLI_OWNER_NAME "wnbd-client"
+#define WNBD_DEFAULT_RM_TIMEOUT_MS 30 * 1000
+#define WNBD_DEFAULT_RM_RETRY_INTERVAL_MS 2000
 
 void
 PrintSyntax();
