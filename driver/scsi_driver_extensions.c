@@ -207,6 +207,8 @@ WnbdHwProcessServiceRequest(PVOID DeviceExtension,
     ASSERT(DeviceExtension);
     ASSERT(Irp);
 
+    InterlockedIncrement64(&((PWNBD_EXTENSION) DeviceExtension)->PendingIOCTLs);
+
     PIO_STACK_LOCATION IoLocation = IoGetCurrentIrpStackLocation((PIRP)Irp);
     NTSTATUS Status = STATUS_INVALID_DEVICE_REQUEST;
 
@@ -222,6 +224,8 @@ WnbdHwProcessServiceRequest(PVOID DeviceExtension,
     } else {
         WNBD_LOG_LOUD("Pending HwProcessServiceRequest");
     }
+
+    InterlockedDecrement64(&((PWNBD_EXTENSION) DeviceExtension)->PendingIOCTLs);
     WNBD_LOG_LOUD(": Exit");
 }
 

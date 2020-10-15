@@ -268,6 +268,8 @@ NTSTATUS WnbdHandleResponse(
         return STATUS_ACCESS_DENIED;
     }
 
+    InterlockedIncrement64(&Device->Stats.PendingReplies);
+
     PLIST_ENTRY ItemLink, ItemNext;
     KIRQL Irql = { 0 };
     KeAcquireSpinLock(&Device->SubmittedReqListLock, &Irql);
@@ -283,6 +285,7 @@ NTSTATUS WnbdHandleResponse(
     if (!Element) {
         WNBD_LOG_ERROR("Received reply with no matching request tag: 0x%llx",
             Response->RequestHandle);
+        InterlockedDecrement64(&Device->Stats.PendingReplies);
         return STATUS_NOT_FOUND;
     }
 
@@ -337,6 +340,7 @@ NTSTATUS WnbdHandleResponse(
     }
 
 Exit:
+    InterlockedDecrement64(&Device->Stats.PendingReplies);
     InterlockedIncrement64(&Device->Stats.TotalReceivedIOReplies);
     InterlockedDecrement64(&Device->Stats.PendingSubmittedIORequests);
 

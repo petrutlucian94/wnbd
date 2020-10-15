@@ -183,6 +183,9 @@ DWORD CmdStats(PCHAR InstanceName)
     printf("AbortedUnsubmittedIORequests: %llu\n", Stats.AbortedUnsubmittedIORequests);
     printf("CompletedAbortedIORequests: %llu\n", Stats.CompletedAbortedIORequests);
     printf("OutstandingIOCount: %llu\n", Stats.OutstandingIOCount);
+    printf("PendingReplies: %llu\n", Stats.PendingReplies);
+    printf("PendingIOCTLs: %llu\n", Stats.PendingIOCTLs);
+    printf("PendingFetchReqIOCTLs: %llu\n", Stats.PendingFetchReqIOCTLs);
     return Status;
 }
 

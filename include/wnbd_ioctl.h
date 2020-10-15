@@ -155,8 +155,11 @@ typedef struct
     // Pending requests, without including aborted ones.
     // Soft device removals will wait for outstanding IO
     // requests.
+    INT64 PendingReplies;
     INT64 OutstandingIOCount;
-    INT64 Reserved[15];
+    INT64 PendingIOCTLs;
+    INT64 PendingFetchReqIOCTLs;
+    INT64 Reserved[13];
 } WNBD_DRV_STATS, *PWNBD_DRV_STATS;
 
 typedef struct

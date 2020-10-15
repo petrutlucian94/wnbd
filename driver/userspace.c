@@ -746,6 +746,7 @@ WnbdParseUserIOCTL(PWNBD_EXTENSION DeviceExtension,
         PWNBD_DRV_STATS OutStatus = (
             PWNBD_DRV_STATS) Irp->AssociatedIrp.SystemBuffer;
         RtlCopyMemory(OutStatus, &Device->Stats, sizeof(WNBD_DRV_STATS));
+        OutStatus->PendingIOCTLs = DeviceExtension->PendingIOCTLs;
         WnbdReleaseDevice(Device);
 
         Irp->IoStatus.Information = sizeof(WNBD_DRV_STATS);
@@ -776,12 +777,14 @@ WnbdParseUserIOCTL(PWNBD_EXTENSION DeviceExtension,
             break;
         }
 
+        InterlockedIncrement64((PLONG64)&Device->Stats.PendingFetchReqIOCTLs);
         Status = WnbdDispatchRequest(Irp, Device, ReqCmd);
         Irp->IoStatus.Information = sizeof(WNBD_IOCTL_FETCH_REQ_COMMAND);
         WNBD_LOG_LOUD("Request dispatch status: %d. Request type: %d Request handle: %llx",
                       Status, ReqCmd->Request.RequestType, ReqCmd->Request.RequestHandle);
 
         WnbdReleaseDevice(Device);
+        InterlockedDecrement64((PLONG64)&Device->Stats.PendingFetchReqIOCTLs);
         break;
 
     case IOCTL_WNBD_SEND_RSP:
