@@ -37,6 +37,7 @@ public:
     };
 
     static std::vector<Command*> commands;
+    static const size_t LINE_WIDTH = 80;
 
     DWORD execute(int argc, const char** argv);
     static Command* get_command(std::string name);
