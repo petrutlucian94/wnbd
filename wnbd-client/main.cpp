@@ -4,7 +4,7 @@
  * Licensed under LGPL-2.1 (see LICENSE)
  */
 
-#include "cmd.h"
+#include "client.h"
 #include <string>
 
 int main(int argc, const char** argv)

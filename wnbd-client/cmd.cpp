@@ -1,325 +1,368 @@
+/*
+ * Copyright (c) 2019 SUSE LLC
+ *
+ * Licensed under LGPL-2.1 (see LICENSE)
+ */
+
 #include "cmd.h"
 #include "wnbd.h"
+#include "nbd_protocol.h"
 #include "version.h"
 
-#include <iostream>
-#include <iomanip>
+#include <string>
+#include <codecvt>
+#include <locale>
+#include <sstream>
 
-#include <boost/algorithm/string.hpp>
-#include <boost/algorithm/string/join.hpp>
+#pragma comment(lib, "Setupapi.lib")
+#pragma comment(lib, "CfgMgr32.lib")
 
-namespace po = boost::program_options;
-using namespace std;
-
-vector<Client::Command*> Client::commands;
-
-Client::Command* Client::get_command(string name) {
-    for (Client::Command *command : Client::commands) {
-        if (command->name == name)
-            return command;
-        for (auto alias: command->aliases) {
-            if (alias == name)
-                return command;
-        }
-    }
-
-    return nullptr;
-}
-
-void get_common_options(po::options_description *named_opts) {
-    // TODO: use verbose or debug instead
-    named_opts->add_options()
-        ("log-level", po::value<int>()->default_value(WnbdLogLevelWarning));
-}
-
-void handle_common_options(po::variables_map &vm) {
-}
-
-DWORD Client::execute(int argc, const char** argv) {
-    vector<string> args;
-    args.insert(args.end(), argv + 1, argv + argc);
-
-    // The first must argument must be the command name.
-    if (args.size() == 0) {
-        args.push_back("help");
-    }
-    string command_name = args[0];
-
-    Client::Command* command = get_command(command_name);
-    if (!command) {
-        cerr << "Unknown command: " << command_name << endl << endl
-             << "See wnbd-client --help." << endl;
-        return ERROR_INVALID_PARAMETER;
-    }
-    // Remove the command from the list of arguments.
-    args.erase(args.begin());
-
-    try {
-        po::positional_options_description positional_opts;
-        po::options_description named_opts;
-
-        if (command->get_options) {
-            command->get_options(&positional_opts, &named_opts);
-        }
-        get_common_options(&named_opts);
-
-        // TODO: handle exceptions.
-        po::variables_map vm;
-        po::store(po::command_line_parser(args)
-            .options(named_opts)
-            .positional(positional_opts)
-            .run(), vm);
-
-        handle_common_options(vm);
-        return command->execute(vm);
-    }
-    // TODO: see if we really need to handle all those exceptions separately.
-    catch (po::required_option& e) {
-        cerr << "wnbd-client: " << e.what() << endl;
-        return ERROR_INVALID_PARAMETER;
-    }
-    catch (po::too_many_positional_options_error& e) {
-        cerr << "wnbd-client: too many arguments" << endl;
-        return ERROR_INVALID_PARAMETER;
-    }
-    catch (po::error& e) {
-        cerr << "wnbd-client: " << e.what() << endl;
-        return ERROR_INVALID_PARAMETER;
-    }
-}
-
-DWORD execute_version(const po::variables_map &vm)
+std::wstring to_wstring(std::string str)
 {
-    cout << "wnbd-client.exe: " << WNBD_VERSION_STR << endl;
+    std::wstring_convert<std::codecvt_utf8<wchar_t>, wchar_t> strconverter;
+    return strconverter.from_bytes(str);
+}
+
+std::string to_string(std::wstring wstr)
+{
+    std::wstring_convert<std::codecvt_utf8<wchar_t>, wchar_t> strconverter;
+    return strconverter.to_bytes(wstr);
+}
+
+std::string OptValToString(PWNBD_OPTION_VALUE Value)
+{
+    std::ostringstream stream;
+    switch(Value->Type) {
+    case WnbdOptBool:
+        stream << (Value->Data.AsBool ? "true" : "false");
+        break;
+    case WnbdOptInt64:
+        stream << Value->Data.AsInt64;
+        break;
+    case WnbdOptWstr:
+        stream << to_string(Value->Data.AsWstr);
+        break;
+    default:
+        stream << "UNKNOWN TYPE (" << Value->Type << ")";
+        break;
+    }
+
+    return stream.str();
+}
+
+void PrintSyntax()
+{
+    fprintf(stderr, "Syntax:\n");
+    fprintf(stderr, "wnbd-client -v\n");
+    fprintf(stderr, "wnbd-client map  <InstanceName> <HostName> "
+                    "<PortName> <ExportName> [<SkipNBDNegotiation> "
+                    "<ReadOnly> <DiskSize> <BlockSize>]\n");
+    fprintf(stderr, "wnbd-client unmap <InstanceName> [HardRemove]\n");
+    fprintf(stderr, "wnbd-client list \n");
+    fprintf(stderr, "wnbd-client stats <InstanceName>\n");
+    fprintf(stderr, "wnbd-client get-opt <OptionName> [Persistent]\n");
+    fprintf(stderr, "wnbd-client set-opt <OptionName> <OptionValue> [Persistent]\n");
+    fprintf(stderr, "wnbd-client reset-opt <OptionName> [Persistent]\n");
+    fprintf(stderr, "wnbd-client list-opt [Persistent]\n");
+}
+
+void PrintFormattedError(DWORD Error)
+{
+    LPVOID LpMsgBuf;
+
+    FormatMessage(
+        FORMAT_MESSAGE_ALLOCATE_BUFFER |
+        FORMAT_MESSAGE_FROM_SYSTEM |
+        FORMAT_MESSAGE_IGNORE_INSERTS,
+        NULL,
+        Error,
+        0,
+        (LPTSTR)&LpMsgBuf,
+        0,
+        NULL
+    );
+
+    fprintf(stderr, "Error code: %d. Error message: %s\n",
+            Error, (LPTSTR)LpMsgBuf);
+
+    LocalFree(LpMsgBuf);
+}
+
+void PrintLastError()
+{
+    PrintFormattedError(GetLastError());
+}
+
+DWORD CmdMap(
+    PCHAR InstanceName,
+    PCHAR HostName,
+    DWORD PortNumber,
+    PCHAR ExportName,
+    UINT64 DiskSize,
+    UINT32 BlockSize,
+    BOOLEAN SkipNegotiation,
+    BOOLEAN ReadOnly)
+{
+    if (!PortNumber) {
+        fprintf(stderr, "Missing NBD server port number.\n");
+        return ERROR_INVALID_PARAMETER;
+    }
+    if (SkipNegotiation && !(BlockSize && DiskSize)) {
+        fprintf(stderr,
+                "The disk size and block size must be provided when "
+                "skipping NBD negotiation.\n");
+        return ERROR_INVALID_PARAMETER;
+    }
+
+    WNBD_PROPERTIES Props = { 0 };
+    HANDLE WnbdDriverHandle = INVALID_HANDLE_VALUE;
+    DWORD Status = WnbdOpenAdapter(&WnbdDriverHandle);
+    if (Status) {
+        fprintf(
+            stderr,
+            "Could not open WNBD device. Make sure that the driver "
+            "is installed.\n");
+        return Status;
+    }
+
+    memcpy(&Props.InstanceName, InstanceName,
+        min(strlen(InstanceName) + 1, WNBD_MAX_NAME_LENGTH));
+    memcpy(&Props.SerialNumber, InstanceName,
+        min(strlen(InstanceName) + 1, WNBD_MAX_NAME_LENGTH));
+    memcpy(&Props.Owner, WNBD_CLI_OWNER_NAME,
+        strlen(WNBD_CLI_OWNER_NAME));
+
+    memcpy(&Props.NbdProperties.Hostname, HostName,
+        min(strlen(HostName) + 1, WNBD_MAX_NAME_LENGTH));
+    memcpy(&Props.NbdProperties.ExportName, ExportName,
+        min(strlen(ExportName) + 1, WNBD_MAX_NAME_LENGTH));
+    Props.NbdProperties.PortNumber = PortNumber;
+    Props.NbdProperties.Flags.SkipNegotiation = SkipNegotiation;
+
+    Props.Flags.UseNbd = TRUE;
+    Props.Flags.ReadOnly = ReadOnly;
+
+    Props.Pid = _getpid();
+    Props.BlockSize = BlockSize;
+    Props.BlockCount = BlockSize ? DiskSize / BlockSize : 0;
+
+    WNBD_CONNECTION_INFO ConnectionInfo = { 0 };
+    Status = WnbdIoctlCreate(WnbdDriverHandle, &Props, &ConnectionInfo, NULL);
+
+    CloseHandle(WnbdDriverHandle);
+    return Status;
+}
+
+DWORD CmdUnmap(PCHAR InstanceName, BOOLEAN HardRemove)
+{
+    WNBD_REMOVE_OPTIONS RemoveOptions = {0};
+    RemoveOptions.Flags.HardRemove = HardRemove;
+
+    // TODO: make those configurable. We should use named arguments first.
+    RemoveOptions.Flags.HardRemoveFallback = TRUE;
+    RemoveOptions.SoftRemoveTimeoutMs = WNBD_DEFAULT_RM_TIMEOUT_MS;
+    RemoveOptions.SoftRemoveRetryIntervalMs = WNBD_DEFAULT_RM_RETRY_INTERVAL_MS;
+
+    DWORD Status = WnbdRemoveEx(InstanceName, &RemoveOptions);
+    return Status;
+}
+
+DWORD CmdStats(PCHAR InstanceName)
+{
+    WNBD_DRV_STATS Stats = {0};
+    DWORD Status = WnbdGetDriverStats(InstanceName, &Stats);
+    if (Status) {
+        return Status;
+    }
+
+    printf("Disk stats:\n");
+    printf("TotalReceivedIORequests: %llu\n", Stats.TotalReceivedIORequests);
+    printf("TotalSubmittedIORequests: %llu\n", Stats.TotalSubmittedIORequests);
+    printf("TotalReceivedIOReplies: %llu\n", Stats.TotalReceivedIOReplies);
+    printf("UnsubmittedIORequests: %llu\n", Stats.UnsubmittedIORequests);
+    printf("PendingSubmittedIORequests: %llu\n", Stats.PendingSubmittedIORequests);
+    printf("AbortedSubmittedIORequests: %llu\n", Stats.AbortedSubmittedIORequests);
+    printf("AbortedUnsubmittedIORequests: %llu\n", Stats.AbortedUnsubmittedIORequests);
+    printf("CompletedAbortedIORequests: %llu\n", Stats.CompletedAbortedIORequests);
+    printf("OutstandingIOCount: %llu\n", Stats.OutstandingIOCount);
+    return Status;
+}
+
+DWORD GetList(PWNBD_CONNECTION_LIST* ConnectionList)
+{
+    DWORD CurrentBufferSize = 0;
+    DWORD BufferSize = 0;
+    DWORD Status = 0;
+    PWNBD_CONNECTION_LIST TempList = NULL;
+
+    // We're using a loop because other connections may show up by the time
+    // we retry.
+    do {
+        if (TempList)
+            free(TempList);
+
+        if (BufferSize) {
+            TempList = (PWNBD_CONNECTION_LIST) calloc(1, BufferSize);
+            if (!TempList) {
+                fprintf(stderr, "Could not allocate %d bytes.\n", BufferSize);
+                Status = ERROR_NOT_ENOUGH_MEMORY;
+                break;
+            }
+        }
+
+        CurrentBufferSize = BufferSize;
+        // If the buffer is too small, the return value is 0 and "BufferSize"
+        // will contain the required size. This is counterintuitive, but
+        // Windows drivers can't return a buffer as well as a non-zero status.
+        Status = WnbdList(TempList, &BufferSize);
+        if (Status)
+            break;
+    } while (CurrentBufferSize < BufferSize);
+
+    if (Status) {
+        if (TempList)
+            free(TempList);
+    }
+    else {
+        *ConnectionList = TempList;
+    }
+    return Status;
+}
+
+// TODO: add CmdShow
+DWORD CmdList()
+{
+    PWNBD_CONNECTION_LIST ConnList = NULL;
+    DWORD err = GetList(&ConnList);
+    if (err) {
+        return err;
+    }
+
+    DWORD Status = 0;
+    printf("%-10s  %-10s  %-5s  %-15s  %s\n", "Pid", "DiskNumber", "Nbd", "Owner", "InstanceName");
+    for (ULONG index = 0; index < ConnList->Count; index++) {
+        std::wstring SerialNumberW = to_wstring(
+            ConnList->Connections[index].Properties.SerialNumber);
+        DWORD DiskNumber = -1;
+        HRESULT hres = WnbdGetDiskNumberBySerialNumber(
+            SerialNumberW.c_str(), &DiskNumber);
+        if (FAILED(hres)) {
+            fprintf(stderr,
+                    "Warning: Could not retrieve disk number for serial '%ls'. "
+                    "HRESULT: 0x%x.\n", SerialNumberW.c_str(), hres);
+            Status = HRESULT_CODE(hres);
+        }
+        printf("%-10d  %-10d  %-5s  %-15s  %s\n",
+               ConnList->Connections[index].Properties.Pid,
+               DiskNumber,
+               ConnList->Connections[index].Properties.Flags.UseNbd ? "true" : "false",
+               ConnList->Connections[index].Properties.Owner,
+               ConnList->Connections[index].Properties.InstanceName);
+    }
+    free(ConnList);
+    return Status;
+}
+
+DWORD CmdVersion() {
+    printf("wnbd-client.exe: %s\n", WNBD_VERSION_STR);
 
     WNBD_VERSION Version = { 0 };
-
     WnbdGetLibVersion(&Version);
-    cout << "libwnbd.dll: " << Version.Description << endl;
+    printf("libwnbd.dll: %s\n", Version.Description);
 
     Version = { 0 };
     DWORD Status = WnbdGetDriverVersion(&Version);
     if (!Status) {
-        cout << "wnbd.sys: " << Version.Description << endl;
+        printf("wnbd.sys: %s\n", Version.Description);
     }
 
     return Status;
 }
 
-std::string format_column(size_t margin, size_t width, std::string text)
+DWORD
+CmdGetOpt(const char* Name, BOOLEAN Persistent)
 {
-    std::string result;
-    boost::trim(text);
-    while (!text.empty())
-    {
-        // Don't apply padding to the first line.
-        if (!result.empty()) {
-            result += std::string(margin, ' ');
-        }
-
-        // The text size exceeds the line width so we're trying to find
-        // the best place to break the line.
-        size_t n = text.size();
-        if (text.size() > width) {
-            n = text.rfind(" ", width);
-            if (n == string::npos) {
-                n = text.find(" ");
-            }
-            if (n == string::npos) {
-                n = text.length();
-            }
-        }
-        // We'll preserve newlines.
-        n = min(n, text.find("\n"));
-
-        result += text.substr(0, n);
-        text.erase(0, n);
-        boost::trim(text);
-
-        if (!text.empty()) {
-            result += "\n";
-        }
+    WNBD_OPTION_VALUE Value;
+    DWORD Status = WnbdGetDrvOpt(Name, &Value, Persistent);
+    if (Status) {
+        return Status;
     }
-    return result;
+
+    printf("Name: %s\n", Name);
+    printf("Value: %s\n", OptValToString(&Value).c_str());
+    return Status;
 }
 
-
-void print_command_usage(
-    Client::Command* command,
-    po::positional_options_description positional_opts,
-    po::options_description named_opts)
+DWORD
+CmdSetOpt(const char* Name, const char* Value, BOOLEAN Persistent)
 {
-    string usage_str = "Usage: wnbd-client ";
-    usage_str += command->name;
-    size_t margin = usage_str.length() + 1;
+    WNBD_OPTION_VALUE OptValue = { WnbdOptWstr };
+    to_wstring(Value).copy((PWCHAR)&OptValue.Data.AsWstr, WNBD_MAX_NAME_LENGTH);
+    return WnbdSetDrvOpt(Name, &OptValue, Persistent);
+}
 
-    set<string> pos_opt_names;
-    std::ostringstream pos_stream;
+DWORD
+CmdResetOpt(const char* Name, BOOLEAN Persistent)
+{
+    return WnbdResetDrvOpt(Name, Persistent);
+}
 
-    string last_pos_opt;
-    for (unsigned int i = 0; i < positional_opts.max_total_count(); i++)
-    {
-        auto opt_name = positional_opts.name_for_position(i);
-        if (opt_name == last_pos_opt) {
+DWORD GetOptList(PWNBD_OPTION_LIST* OptionList, BOOLEAN Persistent)
+{
+    DWORD CurrentBufferSize = 0;
+    DWORD BufferSize = 0;
+    DWORD Status = 0;
+    PWNBD_OPTION_LIST TempList = NULL;
+
+    do {
+        if (TempList)
+            free(TempList);
+
+        if (BufferSize) {
+            TempList = (PWNBD_OPTION_LIST) calloc(1, BufferSize);
+            if (!TempList) {
+                fprintf(stderr, "Could not allocate %d bytes.\n", BufferSize);
+                Status = ERROR_NOT_ENOUGH_MEMORY;
+                break;
+            }
+        }
+
+        CurrentBufferSize = BufferSize;
+        // If the buffer is too small, the return value is 0 and "BufferSize"
+        // will contain the required size.
+        Status = WnbdListDrvOpt(TempList, &BufferSize, Persistent);
+        if (Status)
             break;
-        }
-        pos_stream << "<" << opt_name << "> ";
-        pos_opt_names.insert(opt_name);
+    } while (CurrentBufferSize < BufferSize);
+
+    if (Status) {
+        if (TempList)
+            free(TempList);
     }
-
-    std::ostringstream ops_stream;
-    for (size_t i = 0; i < named_opts.options().size(); ++i)
-    {
-        auto named_opt = named_opts.options()[i];
-        auto opt_name = named_opt->long_name();
-        if (pos_opt_names.find(opt_name) != pos_opt_names.end()) {
-            continue;
-        }
-
-        bool required = named_opt->semantic()->is_required();
-        if (!required) {
-            ops_stream << "[";
-        }
-        ops_stream << "--" << opt_name;
-        if (named_opt->semantic()->max_tokens() != 0) {
-            ops_stream << " <" << opt_name << ">";
-        }
-        if (!required) {
-            ops_stream << "]";
-        }
-        ops_stream << " ";
+    else {
+        *OptionList = TempList;
     }
-
-    string formatted_opts = format_column(
-        margin,
-        max(Client::LINE_WIDTH - margin - 1, Client::LINE_WIDTH / 3),
-        boost::algorithm::join(vector<string>({pos_stream.str(), ops_stream.str()}), "\n"));
-
-    cout << usage_str << " " << formatted_opts << endl;
+    return Status;
 }
 
-DWORD print_command_help(string command_name)
+DWORD
+CmdListOpt(BOOLEAN Persistent)
 {
-    auto command = Client::get_command(command_name);
-    if (!command) {
-        cerr << "Unknown command: " << command << endl;
-        return ERROR_INVALID_PARAMETER;
+    PWNBD_OPTION_LIST OptList = NULL;
+    DWORD Status = GetOptList(&OptList, Persistent);
+    if (Status) {
+        return Status;
     }
 
-    po::positional_options_description positional_opts;
-    po::options_description named_opts;
-
-    if (command->get_options) {
-        command->get_options(&positional_opts, &named_opts);
+    for (ULONG index = 0; index < OptList->Count; index++) {
+        PWNBD_OPTION Option = &OptList->Options[index];
+        printf(
+            "%s: %s (Default: %s)\n",
+            to_string(Option->Name).c_str(),
+            OptValToString(&Option->Value).c_str(),
+            OptValToString(&Option->Default).c_str());
     }
 
-    print_command_usage(command, positional_opts, named_opts);
-    // TODO: fix format
-    // cout << named_opts << endl;
-
+    free(OptList);
     return 0;
 }
-
-DWORD execute_help(const po::variables_map &vm)
-{
-    if (vm.count("command-name")) {
-        string command_name = vm["command-name"].as<string>();
-        return print_command_help(command_name);
-    }
-
-    cout << "wnbd-client commands: " << endl << endl;
-
-    size_t name_col_width = 0;
-    for (Client::Command *command : Client::commands)
-    {
-        size_t width = command->name.length();
-        if (!command->aliases.empty()) {
-            for (auto alias: command->aliases) {
-                width += alias.length();
-            }
-        }
-        width += (command->aliases.size() * 3);
-        name_col_width = max(name_col_width, width);
-    }
-    for (Client::Command *command : Client::commands)
-    {
-        vector<string> cmd_names;
-        cmd_names.push_back(command->name);
-        cmd_names.insert(
-            cmd_names.end(), command->aliases.begin(),
-            command->aliases.end());
-        string joined_cmd_names = boost::algorithm::join(cmd_names, " | ");
-        string formatted_desc = format_column(
-            name_col_width + 1,
-            max(Client::LINE_WIDTH - name_col_width, Client::LINE_WIDTH / 3),
-            command->description);
-        cout << left << setw(name_col_width) << joined_cmd_names
-             << " " << formatted_desc << endl;
-    }
-
-    return 0;
-}
-
-void get_help_args(
-    po::positional_options_description *positonal_opts,
-    po::options_description *named_opts)
-{
-    positonal_opts->add("command-name", 1);
-    named_opts->add_options()
-        ("command-name", po::value<string>(), "Command name.");
-}
-
-void get_test_args(
-    po::positional_options_description *positonal_opts,
-    po::options_description *named_opts)
-{
-    positonal_opts->add("command-name", 1);
-    named_opts->add_options()
-        ("command-name", po::value<string>(), "Command name.")
-        ("some-arg", po::value<string>(), "some-arg.")
-        ("some-other-arg", po::value<string>(), "some-other-arg.")
-        ("another", po::value<string>(), "another")
-        ("yet-another", po::value<string>(), "yet another.");
-}
-
-DWORD execute_test(const po::variables_map& vm) { return 0; }
-
-Client::Command commands[] = {
-    Client::Command(
-        "version", {"-v"}, "Get the client, lib and driver version.",
-        execute_version),
-    Client::Command(
-        "help", {"-h", "--help"},
-        "List all commands or get more details about a specific command.",
-        execute_help, get_help_args),
-    Client::Command(
-        "test", {"-t"},
-        "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa "
-        "zzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzz zzzzzzzzz ccccc ddddddddddddddddddddddddddddddddd ee\n"
-        "abc def\nghi jkl",
-        execute_test, get_test_args),
-    // Client::Command(
-    //     "list", {"ls"}, "List WNBD disks",
-    //     execute_list),
-    // Client::Command(
-    //     "map", {}, "Create new disk mapping.",
-    //     execute_map, get_map_args),
-    // Client::Command(
-    //     "unmap", {"rm"}, "Remove disk mapping.",
-    //     execute_unmap, get_unmap_args),
-    // Client::Command(
-    //     "stats", {}, "Get disk stats.",
-    //     execute_stats, get_stats_args),
-    // Client::Command(
-    //     "list-opt", {}, "List driver options.",
-    //     execute_list_opt),
-    // Client::Command(
-    //     "get-opt", {}, "Get driver option.",
-    //     execute_get_opt, get_opt_getter_args),
-    // Client::Command(
-    //     "set-opt", {}, "Set driver option.",
-    //     execute_set_opt, get_opt_setter_args),
-    // Client::Command(
-    //     "reset-opt", {}, "Reset driver option.",
-    //     execute_reset_opt, get_reset_opt_args),
-};
