@@ -7,8 +7,8 @@
 #include <windows.h>
 
 typedef void (*GetOptionsFunc)(
-    boost::program_options::positional_options_description *positonal_opts,
-    boost::program_options::options_description *named_opts);
+    boost::program_options::positional_options_description &positonal_opts,
+    boost::program_options::options_description &named_opts);
 typedef DWORD (*ExecuteFunc)(const boost::program_options::variables_map &vm);
 
 class Client {
@@ -38,9 +38,10 @@ public:
 
     static std::vector<Command*> commands;
     static const size_t LINE_WIDTH = 80;
+    static const size_t MIN_LCOLUMN_WIDTH = 20;
 
     DWORD execute(int argc, const char** argv);
     static Command* get_command(std::string name);
 
-    static void get_common_options(boost::program_options::options_description* options);
+    static void get_common_options(boost::program_options::options_description& options);
 };

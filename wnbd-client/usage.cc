@@ -76,16 +76,17 @@ string fmt_opt_short(boost::shared_ptr<po::option_description> option) {
 }
 
 void print_option_details(
-    po::positional_options_description positional_opts,
-    po::options_description named_opts,
-    std::string optional_args_title = "Optional options")
+    po::positional_options_description &positional_opts,
+    po::options_description &named_opts,
+    size_t& lcol_width,
+    std::string optional_args_title = "Optional arguments")
 {
     map<string, string> pos_opt_desc;
     ostringstream pos_stream;
 
     // Right column margin.
     size_t option_indent = 2;
-    size_t margin = 0;
+    lcol_width = max(lcol_width, Client::MIN_LCOLUMN_WIDTH);
     string last_pos_opt;
     for (unsigned int i = 0; i < positional_opts.max_total_count(); i++)
     {
@@ -97,7 +98,7 @@ void print_option_details(
         // option descriptions. The actual descriptions will be filled
         // when handling the named opts.
         pos_opt_desc.insert(pair<string, string>(opt_name, ""));
-        margin = max(margin, opt_name.length() + 3 + option_indent);
+        lcol_width = max(lcol_width, opt_name.length() + 3 + option_indent);
     }
 
     ostringstream ops_stream;
@@ -111,26 +112,26 @@ void print_option_details(
             continue;
         }
         optional_arg_count += 1;
-        margin = max(margin,
+        lcol_width = max(lcol_width,
                      fmt_opt_short(named_opt).length() + 1 + option_indent);
     }
 
     if (!pos_opt_desc.empty()) {
-        cout << "Positional arguments:" << endl << endl;
+        cout << "Positional arguments:" << endl;
         for (auto pos_opt : pos_opt_desc) {
             string formatted_desc = fmt_text(
-                margin,
-                max(Client::LINE_WIDTH - margin, Client::LINE_WIDTH / 3),
+                lcol_width,
+                max(Client::LINE_WIDTH - lcol_width, Client::LINE_WIDTH / 3),
                 pos_opt.second);
             cout << left << string(option_indent, ' ')
-                 << setw(margin - option_indent)
+                 << setw(lcol_width - option_indent)
                  << fmt_pos_opt_short(pos_opt.first)
                  << formatted_desc << endl;
         }
     }
 
     if (optional_arg_count) {
-        cout << endl << optional_args_title << ":" << endl << endl;
+        cout << endl << optional_args_title << ":" << endl;
         for (auto named_opt : named_opts.options())
         {
             auto opt_name = named_opt->long_name();
@@ -139,12 +140,12 @@ void print_option_details(
                 continue;
             }
             string formatted_desc = fmt_text(
-                margin,
-                max(Client::LINE_WIDTH - margin, Client::LINE_WIDTH / 3),
+                lcol_width,
+                max(Client::LINE_WIDTH - lcol_width, Client::LINE_WIDTH / 3),
                 named_opt->description());
             cout << left
                  << string(option_indent, ' ')
-                 << setw(margin - option_indent)
+                 << setw(lcol_width - option_indent)
                  << fmt_opt_short(named_opt)
                  << formatted_desc << endl;
         }
@@ -154,8 +155,8 @@ void print_option_details(
 void print_command_usage(
     string binary_name,
     string command_name,
-    po::positional_options_description positional_opts,
-    po::options_description named_opts)
+    po::positional_options_description &positional_opts,
+    po::options_description &named_opts)
 {
     string usage_str = "Usage: " + binary_name + " " + command_name;
     size_t margin = usage_str.length() + 1;
@@ -205,7 +206,7 @@ DWORD print_command_help(string command_name)
     po::options_description named_opts;
 
     if (command->get_options) {
-        command->get_options(&positional_opts, &named_opts);
+        command->get_options(positional_opts, named_opts);
     }
 
     print_command_usage("wnbd-client", command->name,
@@ -214,11 +215,15 @@ DWORD print_command_help(string command_name)
     cout << endl << fmt_text(0, Client::LINE_WIDTH, command->description)
          << endl << endl;
 
-    print_option_details(positional_opts, named_opts);
+    // Use a consistent indentation for option groups.
+    size_t lcol_width = Client::MIN_LCOLUMN_WIDTH;
+    print_option_details(positional_opts, named_opts, lcol_width);
 
+    // There aren't common positional arguments.
+    po::positional_options_description common_pos_opts;
     po::options_description common_opts;
-    Client::get_common_options(&common_opts);
-    print_option_details(po::positional_options_description(), common_opts,
+    Client::get_common_options(common_opts);
+    print_option_details(common_pos_opts, common_opts, lcol_width,
                          "Common arguments");
 
     return 0;

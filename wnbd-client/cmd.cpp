@@ -94,10 +94,10 @@ void PrintLastError()
 }
 
 DWORD CmdMap(
-    PCHAR InstanceName,
-    PCHAR HostName,
+    PCSTR InstanceName,
+    PCSTR HostName,
     DWORD PortNumber,
-    PCHAR ExportName,
+    PCSTR ExportName,
     UINT64 DiskSize,
     UINT32 BlockSize,
     BOOLEAN SkipNegotiation,
@@ -111,6 +111,17 @@ DWORD CmdMap(
         fprintf(stderr,
                 "The disk size and block size must be provided when "
                 "skipping NBD negotiation.\n");
+        return ERROR_INVALID_PARAMETER;
+    }
+    if (!strlen(ExportName)) {
+        ExportName = InstanceName;
+    }
+    if (!strlen(InstanceName)) {
+        fprintf(stderr, "Missing instace name.\n");
+        return ERROR_INVALID_PARAMETER;
+    }
+    if (!strlen(HostName)) {
+        fprintf(stderr, "Missing NBD hostname.\n");
         return ERROR_INVALID_PARAMETER;
     }
 
@@ -153,7 +164,7 @@ DWORD CmdMap(
     return Status;
 }
 
-DWORD CmdUnmap(PCHAR InstanceName, BOOLEAN HardRemove)
+DWORD CmdUnmap(PCSTR InstanceName, BOOLEAN HardRemove)
 {
     WNBD_REMOVE_OPTIONS RemoveOptions = {0};
     RemoveOptions.Flags.HardRemove = HardRemove;
@@ -167,7 +178,7 @@ DWORD CmdUnmap(PCHAR InstanceName, BOOLEAN HardRemove)
     return Status;
 }
 
-DWORD CmdStats(PCHAR InstanceName)
+DWORD CmdStats(PCSTR InstanceName)
 {
     WNBD_DRV_STATS Stats = {0};
     DWORD Status = WnbdGetDriverStats(InstanceName, &Stats);
