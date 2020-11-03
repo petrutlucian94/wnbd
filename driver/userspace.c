@@ -332,6 +332,7 @@ WnbdCreateConnection(PWNBD_EXTENSION DeviceExtension,
     Device->Bus = (USHORT)(bitNumber / MAX_NUMBER_OF_SCSI_TARGETS);
     Device->Target = bitNumber % SCSI_MAXIMUM_TARGETS_PER_BUS;
     Device->Lun = 0;
+    Device->DiskNumber = -1;
     Device->ConnectionId =  WNBD_CONNECTION_ID_FROM_ADDR(
         Device->Bus, Device->Target, Device->Lun);
     WNBD_LOG_INFO("Bus: %d, target: %d, lun: %d, connection id: %llu.",
@@ -492,6 +493,7 @@ WnbdEnumerateActiveConnections(PWNBD_EXTENSION DeviceExtension, PIRP Irp)
         OutEntry->BusNumber = (USHORT)CurrentEntry->Bus;
         OutEntry->TargetId = (USHORT)CurrentEntry->Target;
         OutEntry->Lun = (USHORT)CurrentEntry->Lun;
+        OutEntry->DiskNumber = CurrentEntry->DiskNumber;
 
         OutList->Count++;
         Remaining--;
@@ -698,6 +700,7 @@ WnbdParseUserIOCTL(PWNBD_EXTENSION DeviceExtension,
         OutConnInfo->BusNumber = (USHORT)Device->Bus;
         OutConnInfo->TargetId = (USHORT)Device->Target;
         OutConnInfo->Lun = (USHORT)Device->Lun;
+        OutConnInfo->DiskNumber = Device->DiskNumber;
 
         WnbdReleaseDevice(Device);
 

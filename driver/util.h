@@ -116,6 +116,13 @@ NTSTATUS
 WnbdGetScsiAddress(
     PDEVICE_OBJECT DeviceObject,
     PSCSI_ADDRESS ScsiAddress);
+NTSTATUS
+WnbdGetDiskNumber(
+    PDEVICE_OBJECT DeviceObject,
+    PULONG DiskNumber);
+NTSTATUS
+WnbdGetDiskInstancePath(
+    PDEVICE_OBJECT DeviceObject);
 
 static inline NTSTATUS WstrToBool(const PWCHAR string, PBOOLEAN Value) {
     if (!_wcsicmp(string, L"1") ||

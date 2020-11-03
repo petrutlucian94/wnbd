@@ -215,7 +215,6 @@ DWORD GetCMDeviceInstanceByID(
 
         PWSTR Path = NULL;
         GetCMDiskInstancePath(CurrDeviceId, &Path);
-        LogError("Device: %d %ls.", wcslen(Path), Path);
 
         if (!_wcsicmp(DeviceID, CurrDeviceId)) {
             *CMDeviceInstance = ChildDevInst;

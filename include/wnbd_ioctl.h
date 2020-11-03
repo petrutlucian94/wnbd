@@ -149,7 +149,8 @@ typedef struct
     USHORT TargetId;
     USHORT Lun;
     WNBD_CONNECTION_ID ConnectionId;
-    BYTE Reserved[128];
+    INT DiskNumber;
+    BYTE Reserved[124];
 } WNBD_CONNECTION_INFO, *PWNBD_CONNECTION_INFO;
 WNBD_ASSERT_SZ_EQ(WNBD_CONNECTION_INFO, 1520);
 

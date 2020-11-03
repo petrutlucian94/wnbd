@@ -279,19 +279,9 @@ DWORD CmdList()
          << "InstanceName" << endl;
 
     for (ULONG index = 0; index < ConnList->Count; index++) {
-        wstring SerialNumberW = to_wstring(
-            ConnList->Connections[index].Properties.SerialNumber);
-        DWORD DiskNumber = -1;
-        HRESULT hres = WnbdGetDiskNumberBySerialNumber(
-            SerialNumberW.c_str(), &DiskNumber);
-        if (FAILED(hres)) {
-            wcerr << "Warning: Could not retrieve disk number for serial '"
-                  << SerialNumberW << "'." << "HRESULT: " << hex << hres << endl;
-            Status = HRESULT_CODE(hres);
-        }
         cout << left
              << setw(10) << ConnList->Connections[index].Properties.Pid << "  "
-             << setw(10) << DiskNumber << "  "
+             << setw(10) << ConnList->Connections[index].DiskNumber << "  "
              << setw(5) << (ConnList->Connections[index].Properties.Flags.UseNbd
                             ? "true" : "false") << "  "
              << setw(15) << ConnList->Connections[index].Properties.Owner << "  "
