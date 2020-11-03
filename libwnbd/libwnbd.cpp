@@ -137,6 +137,49 @@ DWORD PnpRemoveDevice(
     return Status;
 }
 
+DWORD GetCMDiskInstancePath(
+    PCWSTR DeviceID,
+    PWSTR* DevicePath)
+{
+    ULONG DeviceInterfaceListLength = 0;
+    PWSTR DeviceInterfaceList = NULL;
+    DWORD CMStatus = 0;
+    do {
+        if (DeviceInterfaceList) {
+            free(DeviceInterfaceList);
+        }
+        CM_Get_Device_Interface_List_Size(
+            &DeviceInterfaceListLength,
+            (LPGUID)&DiskClassGuid, NULL,
+            CM_GET_DEVICE_INTERFACE_LIST_ALL_DEVICES);
+        if (CMStatus) {
+            LogError("Could not get device interface list size. "
+                     "CM status: %d", CMStatus);
+            return ERROR_CAN_NOT_COMPLETE;
+        }
+        DeviceInterfaceList = (PWSTR) calloc(
+            DeviceInterfaceListLength, sizeof(WCHAR));
+        if (!DeviceInterfaceList) {
+            LogError("Could not allocate %d bytes.",
+                     DeviceInterfaceListLength * sizeof(WCHAR));
+            return ERROR_OUTOFMEMORY;
+        }
+        CMStatus = CM_Get_Device_Interface_ListW(
+            (LPGUID)&DiskClassGuid,
+            (DEVINSTID_W)DeviceID, DeviceInterfaceList,
+            DeviceInterfaceListLength,
+            CM_GET_DEVICE_INTERFACE_LIST_ALL_DEVICES);
+        if (CMStatus) {
+            LogError("Could not get property keys. CM status: %d", CMStatus);
+            free(DeviceInterfaceList);
+        }
+        else {
+            *DevicePath = DeviceInterfaceList;
+            return 0;
+        }
+    } while (CMStatus == CR_BUFFER_SMALL);
+}
+
 DWORD GetCMDeviceInstanceByID(
     const wchar_t* DeviceID,
     PDEVINST CMDeviceInstance)
@@ -169,6 +212,10 @@ DWORD GetCMDeviceInstanceByID(
             LogError("Could not get disk id. CM status: %d", CMStatus);
             return ERROR_CAN_NOT_COMPLETE;
         }
+
+        PWSTR Path = NULL;
+        GetCMDiskInstancePath(CurrDeviceId, &Path);
+        LogError("Device: %d %ls.", wcslen(Path), Path);
 
         if (!_wcsicmp(DeviceID, CurrDeviceId)) {
             *CMDeviceInstance = ChildDevInst;
