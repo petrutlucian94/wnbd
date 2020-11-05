@@ -19,9 +19,14 @@
 #include "wnbd_log.h"
 #include "utils.h"
 
+#include <boost/filesystem.hpp>
+
 #pragma comment(lib, "Setupapi.lib")
 #pragma comment(lib, "Newdev.lib")
 #pragma comment(lib, "Shlwapi.lib")
+
+namespace fs = boost::filesystem;
+using namespace std;
 
 #define STRING_OVERFLOWS(Str, MaxLen) (strlen(Str + 1) > MaxLen)
 
@@ -137,48 +142,49 @@ DWORD WnbdOpenAdapter(PHANDLE Handle)
     return Status;
 }
 
-DWORD RemoveWnbdInf(_In_ LPCTSTR InfName)
+DWORD CheckInfFile(LPCTSTR InfPath, PBOOL IsWnbdDriver)
 {
     DWORD Status = 0;
     UINT ErrorLine;
+    *IsWnbdDriver = FALSE;
 
-    HINF HandleInf = SetupOpenInfFile(InfName, NULL, INF_STYLE_WIN4, &ErrorLine);
+    HINF HandleInf = SetupOpenInfFile(InfPath, NULL, INF_STYLE_WIN4, &ErrorLine);
     if (HandleInf == INVALID_HANDLE_VALUE) {
         Status = GetLastError();
-        LogError("SetupOpenInfFile failed with "
-            "error: %d, at line. Error message: %s",
-            ErrorLine, Status, win32_strerror(Status).c_str());
-        goto failed;
+        LogError("Could not open driver INF file %ls. "
+                 "Error: %d, at line %d. Error message: %s",
+                 InfPath, Status, ErrorLine, win32_strerror(Status).c_str());
+        goto Exit;
     }
 
     INFCONTEXT Context;
-    if (!SetupFindFirstLine(HandleInf, INFSTR_SECT_VERSION, INFSTR_KEY_CATALOGFILE, &Context)) {
+    if (!SetupFindFirstLine(HandleInf, INFSTR_SECT_VERSION,
+                            INFSTR_KEY_CATALOGFILE, &Context)) {
+        // We'll treat it as a non-fatal error and keep looking for WNBD drivers.
+        // Some drivers might have one catalog per architecture.
         Status = GetLastError();
-        LogError("SetupFindFirstLine failed with "
-            "error: %d. Error message: %s", Status, win32_strerror(Status).c_str());
-        goto failed;
+        LogWarning("Could not find INF catalog section. "
+                   "File: %ls. Error: %d. Error message: %s",
+                   InfPath, Status, win32_strerror(Status).c_str());
+        Status = 0;
+        goto Exit;
     }
 
     TCHAR InfData[MAX_INF_STRING_LENGTH];
     if (!SetupGetStringField(&Context, 1, InfData, ARRAYSIZE(InfData), NULL)) {
         Status = GetLastError();
-        LogError("SetupGetStringField failed with "
-            "error: %d. Error message: %s", Status, win32_strerror(Status).c_str());
-        goto failed;
+        LogError("Could not retrieve driver catalog name. "
+                 "File: %ls. Error: %d. Error message: %s",
+                 InfPath, Status, win32_strerror(Status).c_str());
+        goto Exit;
     }
 
     /* Match the OEM inf file based on the catalog string wnbd.cat */
     if (!wcscmp(InfData, L"wnbd.cat")) {
-        std::wstring SearchString(InfName);
-        if (!SetupUninstallOEMInf(
-            SearchString.substr(SearchString.find_last_of(L"\\") + 1).c_str(), SUOI_FORCEDELETE, 0)) {
-            Status = GetLastError();
-            LogError("SetupUninstallOEMInfA failed with "
-                "error: %d. Error message: %s", Status, win32_strerror(Status).c_str());
-        }
+        *IsWnbdDriver = TRUE;
     }
 
-failed:
+Exit:
     if (HandleInf != INVALID_HANDLE_VALUE) {
         SetupCloseInfFile(HandleInf);
     }
@@ -212,12 +218,25 @@ DWORD CleanDrivers()
     }
 
     do {
-        Status = RemoveWnbdInf(OemFindData.cFileName);
-        if (Status) {
-            LogError("Failed while trying to remove OEM file: %ls",
-                OemFindData.cFileName);
-            break;
+        BOOL IsWnbdDriver = FALSE;
+        DWORD Status2 = CheckInfFile(OemFindData.cFileName, &IsWnbdDriver);
+        if (Status2) {
+            Status = Status2;
+            continue;
         }
+        if (!IsWnbdDriver) {
+            continue;
+        }
+
+        LogInfo("Removing WNBD driver: %ls", OemFindData.cFileName);
+        wstring InfName = fs::path(OemFindData.cFileName).filename().wstring();
+        if (!SetupUninstallOEMInf(InfName.c_str(), SUOI_FORCEDELETE, 0)) {
+            Status = GetLastError();
+            LogError("Could not uninstall driver: %ls. "
+                     "Error: %d. Error message: %s",
+                     InfName.c_str(), Status, win32_strerror(Status).c_str());
+        }
+
     } while (FindNextFile(DirHandle, &OemFindData));
 
     FindClose(DirHandle);
