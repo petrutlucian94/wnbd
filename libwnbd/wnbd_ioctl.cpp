@@ -26,67 +26,59 @@
 #define STRING_OVERFLOWS(Str, MaxLen) (strlen(Str + 1) > MaxLen)
 
 // Open the WNBD SCSI adapter device.
-DWORD WnbdOpenAdapterEx(PHANDLE Handle, PDEVINST CMDeviceInstance)
+DWORD WnbdOpenAdapterEx(
+    PHANDLE Handle,
+    HDEVINFO DeviceInfoList,
+    PSP_DEVINFO_DATA DeviceInfoData,
+    DWORD DevIndex,
+    BOOLEAN ExpectExisting)
 {
-    HDEVINFO DevInfo = { 0 };
-    SP_DEVINFO_DATA DevInfoData = { 0 };
-    DevInfoData.cbSize = sizeof(DevInfoData);
     SP_DEVICE_INTERFACE_DATA DevInterfaceData = { 0 };
-    PSP_DEVICE_INTERFACE_DETAIL_DATA DevInterfaceDetailData = NULL;
-    ULONG DevIndex = 0;
-    ULONG RequiredSize = 0;
-    ULONG ErrorCode = 0;
-    HANDLE WnbdDriverHandle = INVALID_HANDLE_VALUE;
-
-    DevInfo = SetupDiGetClassDevs(&WNBD_GUID, NULL, NULL,
-                                  DIGCF_PRESENT | DIGCF_DEVICEINTERFACE);
-    if (DevInfo == INVALID_HANDLE_VALUE) {
-        ErrorCode = ERROR_OPEN_FAILED;
-        goto Exit;
-    }
-
     DevInterfaceData.cbSize = sizeof(SP_DEVICE_INTERFACE_DATA);
-    DevIndex = 0;
+    PSP_DEVICE_INTERFACE_DETAIL_DATA DevInterfaceDetailData = NULL;
+    ULONG RequiredSize = 0;
+    ULONG Status = 0;
+    HANDLE AdapterHandle = INVALID_HANDLE_VALUE;
 
-    if (!SetupDiEnumDeviceInterfaces(DevInfo, NULL, &WNBD_GUID,
-                                     DevIndex++, &DevInterfaceData)) {
-        ErrorCode = GetLastError();
+    if (!SetupDiEnumDeviceInterfaces(DeviceInfoList, NULL, &WNBD_GUID,
+                                     DevIndex, &DevInterfaceData)) {
+        Status = GetLastError();
         goto Exit;
     }
 
-    if (!SetupDiGetDeviceInterfaceDetail(DevInfo, &DevInterfaceData, NULL,
+    if (!SetupDiGetDeviceInterfaceDetail(DeviceInfoList, &DevInterfaceData, NULL,
                                          0, &RequiredSize, NULL)) {
-        ErrorCode = GetLastError();
-        if (ErrorCode && ERROR_INSUFFICIENT_BUFFER != ErrorCode) {
+        Status = GetLastError();
+        if (Status && ERROR_INSUFFICIENT_BUFFER != Status) {
             goto Exit;
         }
         else {
-            ErrorCode = 0;
+            Status = 0;
         }
     }
 
     DevInterfaceDetailData =
-        (PSP_DEVICE_INTERFACE_DETAIL_DATA)malloc(RequiredSize);
+        (PSP_DEVICE_INTERFACE_DETAIL_DATA) malloc(RequiredSize);
     if (!DevInterfaceDetailData) {
-        ErrorCode = ERROR_BUFFER_OVERFLOW;
+        Status = ERROR_BUFFER_OVERFLOW;
         goto Exit;
     }
     DevInterfaceDetailData->cbSize = sizeof(SP_DEVICE_INTERFACE_DETAIL_DATA);
 
     if (!SetupDiGetDeviceInterfaceDetail(
-            DevInfo, &DevInterfaceData, DevInterfaceDetailData,
-            RequiredSize, &RequiredSize, &DevInfoData))
+            DeviceInfoList, &DevInterfaceData, DevInterfaceDetailData,
+            RequiredSize, &RequiredSize, DeviceInfoData))
     {
-        ErrorCode = GetLastError();
+        Status = GetLastError();
         goto Exit;
     }
 
-    WnbdDriverHandle = CreateFile(
+    AdapterHandle = CreateFile(
         DevInterfaceDetailData->DevicePath,
         GENERIC_READ | GENERIC_WRITE, 0, 0, OPEN_EXISTING,
         FILE_FLAG_OVERLAPPED, 0);
-    if (INVALID_HANDLE_VALUE == WnbdDriverHandle) {
-        ErrorCode = GetLastError();
+    if (INVALID_HANDLE_VALUE == AdapterHandle) {
+        Status = GetLastError();
         goto Exit;
     }
 
@@ -94,35 +86,55 @@ Exit:
     if (DevInterfaceDetailData) {
         free(DevInterfaceDetailData);
     }
-    if (DevInfo) {
-        SetupDiDestroyDeviceInfoList(DevInfo);
-    }
 
-    if (!ErrorCode) {
-        *Handle = WnbdDriverHandle;
-        *CMDeviceInstance = DevInfoData.DevInst;
+    if (!Status) {
+        *Handle = AdapterHandle;
     }
     else {
-        if (ErrorCode == ERROR_ACCESS_DENIED) {
+        if (Status == ERROR_ACCESS_DENIED) {
             LogError(
                 "Could not open WNBD adapter device. Access denied, try "
                 "using an elevated command prompt.");
-        }
-        else {
+        } else if (Status == ERROR_NO_MORE_ITEMS) {
+            if (ExpectExisting)
+                LogError(
+                    "No WNBD adapter found. Please make sure that the driver "
+                    "is installed.");
+        } else {
             LogError(
                 "Could not open WNBD adapter device. Please make sure that "
                 "the driver is installed. Error: %d. Error message: %s",
-                ErrorCode, win32_strerror(ErrorCode).c_str());
+                Status, win32_strerror(Status).c_str());
         }
     }
-    return ErrorCode;
+    return Status;
 }
 
 // Open the WNBD SCSI adapter device.
 DWORD WnbdOpenAdapter(PHANDLE Handle)
 {
-    DEVINST DevInst = { 0 };
-    return WnbdOpenAdapterEx(Handle, &DevInst);
+    DWORD Status = 0;
+    SP_DEVINFO_DATA DevInfoData = { 0 };
+    DevInfoData.cbSize = sizeof(DevInfoData);
+
+    HDEVINFO DeviceInfoList = SetupDiGetClassDevs(
+        &WNBD_GUID, NULL, NULL, DIGCF_PRESENT | DIGCF_DEVICEINTERFACE);
+    if (DeviceInfoList == INVALID_HANDLE_VALUE) {
+        Status = GetLastError();
+        LogError(
+            "Could not enumerate WNBD adapter devices. "
+            "Error: %d. Error message: %s",
+            Status, win32_strerror(Status).c_str());
+        return Status;
+    }
+
+    Status = WnbdOpenAdapterEx(
+        Handle, DeviceInfoList, &DevInfoData, 0, TRUE);
+    if (!Status) {
+        SetupDiDestroyDeviceInfoList(DeviceInfoList);
+    }
+
+    return Status;
 }
 
 DWORD RemoveWnbdInf(_In_ LPCTSTR InfName)
@@ -212,14 +224,14 @@ DWORD CleanDrivers()
     return Status;
 }
 
-DWORD RemoveWnbdDevice(HDEVINFO AdapterDevHandle, PSP_DEVINFO_DATA DevInfoData, PBOOL RebootRequired)
+DWORD RemoveWnbdAdapterDevice(HDEVINFO DeviceInfoList, PSP_DEVINFO_DATA DevInfoData, PBOOL RebootRequired)
 {
     SP_DRVINFO_DETAIL_DATA_A DrvDetailData = { 0 };
     DrvDetailData.cbSize = sizeof DrvDetailData;
     DWORD Status = ERROR_SUCCESS;
 
     /* Queue the device for removal before trying to remove the OEM information file */
-    if (!DiUninstallDevice(0, AdapterDevHandle, DevInfoData, 0, RebootRequired)) {
+    if (!DiUninstallDevice(0, DeviceInfoList, DevInfoData, 0, RebootRequired)) {
         Status = GetLastError();
         LogError(
             "Could not remove driver. "
@@ -229,49 +241,7 @@ DWORD RemoveWnbdDevice(HDEVINFO AdapterDevHandle, PSP_DEVINFO_DATA DevInfoData, 
     return Status;
 }
 
-static DWORD FindWnbdAdapterDevice(HDEVINFO* AdapterDevHandle, SP_DEVINFO_DATA* DevInfoData)
-{
-    CHAR TempBuf[2048];
-    memset(TempBuf, 0, sizeof(TempBuf));
-    BOOL Found = FALSE;
-    DWORD Status = ERROR_FILE_NOT_FOUND;
-
-    *AdapterDevHandle = SetupDiGetClassDevsA(&WNBD_GUID, 0, 0, DIGCF_ALLCLASSES | DIGCF_PRESENT);
-    if (INVALID_HANDLE_VALUE == *AdapterDevHandle) {
-        Status = GetLastError();
-        LogError(
-            "SetupDiGetClassDevs failed. "
-            "Error: %d. Error message: %s", Status, win32_strerror(Status).c_str());
-        return Status;
-    }
-
-    for (DWORD I = 0; !Found && SetupDiEnumDeviceInfo(*AdapterDevHandle, I, DevInfoData); I++)
-    {
-        if (!SetupDiGetDeviceRegistryPropertyA(*AdapterDevHandle, DevInfoData, SPDRP_HARDWAREID, 0,
-            (PBYTE)TempBuf, sizeof(TempBuf) - 1, 0)) {
-            continue;
-        }
-
-        if (strstr(TempBuf, WNBD_HARDWAREID) != NULL) {
-            Found = TRUE;
-            break;
-        }
-    }
-
-    if (!Found) {
-        Status = GetLastError();
-        if (ERROR_NO_MORE_ITEMS != Status) {
-            LogError(
-                "Failed to locate device with hardware id: %s. Error: %d. Error message: %s",
-                WNBD_HARDWAREID, Status, win32_strerror(Status).c_str());
-        }
-        return Status;
-    }
-
-    return ERROR_SUCCESS;
-}
-
-DWORD RemoveAllDevices()
+DWORD RemoveAllWnbdDisks(HANDLE AdapterHandle)
 {
     DWORD BufferSize = 0;
     DWORD Status = 0;
@@ -280,12 +250,13 @@ DWORD RemoveAllDevices()
     WNBD_OPTION_VALUE OptValue = { WnbdOptBool };
     /* Disallow new mappings so we can remove all current mappings */
     OptValue.Data.AsBool = FALSE;
-    Status = WnbdSetDrvOpt("NewMappingsAllowed", &OptValue, FALSE);
+    Status = WnbdIoctlSetDrvOpt(
+        AdapterHandle, "NewMappingsAllowed", &OptValue, FALSE, NULL);
     if (Status) {
         goto exit;
     }
 
-    Status = WnbdList(ConnList, &BufferSize);
+    Status = WnbdIoctlList(AdapterHandle, ConnList, &BufferSize, NULL);
     if (!BufferSize) {
         goto exit;
     }
@@ -296,17 +267,14 @@ DWORD RemoveAllDevices()
             "Failed to allocate %d bytes.", BufferSize);
         goto exit;
     }
-    Status = WnbdList(ConnList, &BufferSize);
+    Status = WnbdIoctlList(AdapterHandle, ConnList, &BufferSize, NULL);
     if (Status) {
         goto exit;
     }
-    CHAR* InstanceName;
     for (ULONG index = 0; index < ConnList->Count; index++) {
-        InstanceName = ConnList->Connections[index].Properties.InstanceName;
-        WNBD_REMOVE_OPTIONS RemoveOptions = { 0 };
+        char* InstanceName = ConnList->Connections[index].Properties.InstanceName;
         /* TODO add parallel and soft disconnect removal */
-        RemoveOptions.Flags.HardRemove = TRUE;
-        Status = WnbdRemoveEx(InstanceName, &RemoveOptions);
+        Status = WnbdIoctlRemove(AdapterHandle, InstanceName, NULL, NULL);
         if (Status) {
             goto exit;
         }
@@ -319,44 +287,62 @@ exit:
     return Status;
 }
 
-DWORD WnbdUninstallDriver(PBOOL RebootRequired)
-{
-    DWORD Status = ERROR_SUCCESS;
-    HDEVINFO AdapterDevHandle = INVALID_HANDLE_VALUE;
-    SP_DEVINFO_DATA DevInfoData;
-    DevInfoData.cbSize = sizeof DevInfoData;
+// Remove all WNBD adapters and disks.
+DWORD RemoveAllWnbdDevices(PBOOL RebootRequired) {
+    DWORD Status = 0, Status2 = 0;
+    DWORD DevIndex = 0;
 
-    PWNBD_CONNECTION_LIST ConnList = NULL;
-    Status = RemoveAllDevices();
-    if (Status) {
-        goto exit;
+    HDEVINFO DeviceInfoList = SetupDiGetClassDevs(
+        &WNBD_GUID, NULL, NULL, DIGCF_PRESENT | DIGCF_DEVICEINTERFACE);
+    if (DeviceInfoList == INVALID_HANDLE_VALUE) {
+        Status = GetLastError();
+        LogError(
+            "Could not enumerate WNBD adapter devices. "
+            "Error: %d. Error message: %s",
+            Status, win32_strerror(Status).c_str());
+        return Status;
     }
 
-    while (Status == ERROR_SUCCESS) {
-        Status = FindWnbdAdapterDevice(&AdapterDevHandle, &DevInfoData);
-        if (ERROR_SUCCESS != Status) {
-            goto exit;
+    // Iterate over all WNBD adapters and remove any associated disk.
+    // In case of failure, we proceed to the next adapter and
+    // return the first encountered error at the end.
+    while (TRUE) {
+        HANDLE AdapterHandle = INVALID_HANDLE_VALUE;
+        SP_DEVINFO_DATA DevInfoData;
+        DevInfoData.cbSize = sizeof DevInfoData;
+
+        DWORD Status = WnbdOpenAdapterEx(
+            &AdapterHandle, &DeviceInfoList, &DevInfoData, DevIndex++, FALSE);
+        if (Status) {
+            Status = Status == ERROR_NO_MORE_ITEMS ? 0 : Status;
+            break;
         }
 
-        Status = RemoveWnbdDevice(AdapterDevHandle, &DevInfoData, RebootRequired);
+        Status2 = RemoveAllWnbdDisks(AdapterHandle);
+        Status = Status ? Status : Status2;
 
-        if (!SetupDiDestroyDeviceInfoList(AdapterDevHandle)) {
-            Status = GetLastError();
-            LogError("SetupDiDestroyDeviceInfoList failed with "
-                "error: %d. Error message: %s", Status, win32_strerror(Status).c_str());
-        }
+        Status2 = RemoveWnbdAdapterDevice(DeviceInfoList, &DevInfoData, RebootRequired);
+        Status = Status ? Status : Status2;
+
+        CloseHandle(AdapterHandle);
+        SetupDiDestroyDeviceInfoList(DeviceInfoList);
     }
 
-exit:
-    Status = CleanDrivers();
     return Status;
 }
 
-DWORD CreateWnbdAdapter(CHAR* ClassName, SP_DEVINFO_DATA* DevInfoData, HDEVINFO* AdapterDevHandle)
+DWORD WnbdUninstallDriver(PBOOL RebootRequired)
+{
+    DWORD Status = RemoveAllWnbdDevices(RebootRequired);
+    DWORD Status2 = CleanDrivers();
+    return Status ? Status : Status2;
+}
+
+DWORD CreateWnbdAdapter(CHAR* ClassName, SP_DEVINFO_DATA* DevInfoData, HDEVINFO* DeviceInfoList)
 {
     DWORD Status = 0;
 
-    if (INVALID_HANDLE_VALUE == (*AdapterDevHandle = SetupDiCreateDeviceInfoList(&WNBD_GUID, 0))) {
+    if (INVALID_HANDLE_VALUE == (*DeviceInfoList = SetupDiCreateDeviceInfoList(&WNBD_GUID, 0))) {
         Status = GetLastError();
         LogError(
             "SetupDiCreateDeviceInfoList failed with error: %d. Error message: %s",
@@ -364,7 +350,7 @@ DWORD CreateWnbdAdapter(CHAR* ClassName, SP_DEVINFO_DATA* DevInfoData, HDEVINFO*
         return Status;
     }
 
-    if (!SetupDiCreateDeviceInfoA(*AdapterDevHandle, ClassName, &WNBD_GUID, 0, 0, DICD_GENERATE_ID, DevInfoData)) {
+    if (!SetupDiCreateDeviceInfoA(*DeviceInfoList, ClassName, &WNBD_GUID, 0, 0, DICD_GENERATE_ID, DevInfoData)) {
         Status = GetLastError();
         LogError(
             "SetupDiCreateDeviceInfoA failed with error: %d. Error message: %s",
@@ -372,7 +358,7 @@ DWORD CreateWnbdAdapter(CHAR* ClassName, SP_DEVINFO_DATA* DevInfoData, HDEVINFO*
         return Status;
     }
 
-    if (!SetupDiSetDeviceRegistryPropertyA(*AdapterDevHandle, DevInfoData,
+    if (!SetupDiSetDeviceRegistryPropertyA(*DeviceInfoList, DevInfoData,
         SPDRP_HARDWAREID, (PBYTE)WNBD_HARDWAREID, WNBD_HARDWAREID_LEN)) {
         Status = GetLastError();
         LogError(
@@ -384,7 +370,7 @@ DWORD CreateWnbdAdapter(CHAR* ClassName, SP_DEVINFO_DATA* DevInfoData, HDEVINFO*
     return Status;
 }
 
-DWORD InstallDriver(CHAR* FileNameBuf, HDEVINFO* AdapterDevHandle, PBOOL RebootRequired)
+DWORD InstallDriver(CHAR* FileNameBuf, HDEVINFO* DeviceInfoList, PBOOL RebootRequired)
 {
     GUID ClassGuid = { 0 };
     CHAR ClassName[MAX_CLASS_NAME_LEN];
@@ -401,11 +387,11 @@ DWORD InstallDriver(CHAR* FileNameBuf, HDEVINFO* AdapterDevHandle, PBOOL RebootR
         return Status;
     }
 
-    if (CreateWnbdAdapter(ClassName, &DevInfoData, AdapterDevHandle)) {
+    if (CreateWnbdAdapter(ClassName, &DevInfoData, DeviceInfoList)) {
         return Status;
     }
 
-    if (!SetupDiCallClassInstaller(DIF_REGISTERDEVICE, *AdapterDevHandle, &DevInfoData)) {
+    if (!SetupDiCallClassInstaller(DIF_REGISTERDEVICE, *DeviceInfoList, &DevInfoData)) {
         Status = GetLastError();
         LogError(
             "SetupDiCallClassInstaller failed with error: %d. Error message: %s",
@@ -414,7 +400,7 @@ DWORD InstallDriver(CHAR* FileNameBuf, HDEVINFO* AdapterDevHandle, PBOOL RebootR
     }
 
     InstallParams.cbSize = sizeof InstallParams;
-    if (!SetupDiGetDeviceInstallParamsA(*AdapterDevHandle, &DevInfoData, &InstallParams)) {
+    if (!SetupDiGetDeviceInstallParamsA(*DeviceInfoList, &DevInfoData, &InstallParams)) {
         Status = GetLastError();
         LogError(
             "SetupDiGetDeviceInstallParamsA failed with error: %d. Error message: %s",
@@ -433,9 +419,10 @@ DWORD WnbdInstallDriver(CONST CHAR* FileName, PBOOL RebootRequired)
 {
     CHAR FullFileName[MAX_PATH];
     DWORD Status = ERROR_SUCCESS;
-    HDEVINFO AdapterDevHandle = INVALID_HANDLE_VALUE;
+    HDEVINFO DeviceInfoList = INVALID_HANDLE_VALUE;
     SP_DEVINFO_DATA DevInfoData;
     DevInfoData.cbSize = sizeof DevInfoData;
+    HANDLE AdapterHandle = INVALID_HANDLE_VALUE;
 
     if (0 == GetFullPathNameA(FileName, MAX_PATH, FullFileName, 0)) {
         Status = GetLastError();
@@ -450,14 +437,16 @@ DWORD WnbdInstallDriver(CONST CHAR* FileName, PBOOL RebootRequired)
         goto exit;
     }
 
-    // We assume that an installed driver has an WNBD device
-    if (ERROR_SUCCESS == FindWnbdAdapterDevice(&AdapterDevHandle, &DevInfoData)) {
-        LogError("Driver already installed");
+    Status = WnbdOpenAdapter(&AdapterHandle);
+    if (!Status) {
+        LogError("A WNBD adapter already exists. Please uninstall it "
+                 "before updating the driver.");
         Status = ERROR_DUPLICATE_FOUND;
+        CloseHandle(AdapterHandle);
         goto exit;
     }
 
-    Status = InstallDriver(FullFileName, &AdapterDevHandle, RebootRequired);
+    Status = InstallDriver(FullFileName, &DeviceInfoList, RebootRequired);
     if (ERROR_SUCCESS != Status) {
         LogError(
             "Failed to install driver. Error: %d. Error message: %s",
